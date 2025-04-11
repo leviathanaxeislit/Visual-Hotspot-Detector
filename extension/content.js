@@ -70,9 +70,9 @@ function extractDOMData() {
 }
 
 
-function displayHotspotRegions(regions, scores) { // Receive scores as well
+function displayHotspotRegions(regions, scores) { // Expect 'scores' to be passed now (if you choose to use them)
   clearHotspotOverlays();
-  regions.forEach((region, index) => { // Index is the rank (position in sorted list)
+  regions.forEach((region, index) => { // 'index' is the rank (0-based)
       const [x1, y1, x2, y2] = region;
       const hotspotDiv = document.createElement('div');
       hotspotDiv.className = 'hotspot-overlay';
@@ -83,21 +83,27 @@ function displayHotspotRegions(regions, scores) { // Receive scores as well
       hotspotDiv.style.height = `${y2 - y1}px`;
       hotspotDiv.style.pointerEvents = 'none';
       hotspotDiv.style.zIndex = '1001';
+      hotspotDiv.style.transition = 'opacity 0.3s ease-in-out'; // Add transition for smoother appearance
 
-      let color = 'rgba(255, 0, 0, 0.4)'; // Default red
-      if (index < 3) { // Top 3 hotspots - Bright red
-          color = 'rgba(255, 0, 0, 0.8)';
-      } else if (index < 8) { // Next 5 - Orange
-          color = 'rgba(255, 165, 0, 0.6)'; // Orange
-      } else { // Rest - Yellow
-          color = 'rgba(255, 255, 0, 0.4)'; // Yellow
+      let color = 'rgba(255, 255, 0, 0.4)'; // Default: Yellow (lower rank)
+      let borderColor = 'yellow';
+
+      if (index < 3) { // Top 3 hotspots - Red
+          color = 'rgba(255, 0, 0, 0.6)'; // More opaque red
+          borderColor = 'red';
+      } else if (index < 8) { // Next 5 hotspots - Orange
+          color = 'rgba(255, 165, 0, 0.5)'; // Orange
+          borderColor = 'orange';
       }
+      // Default (rest) - Yellow (already set)
+
       hotspotDiv.style.backgroundColor = color;
-      hotspotDiv.style.border = `1px solid ${color.replace('0.4', '0.8').replace('0.6', '0.8')}`; // Darker border
+      hotspotDiv.style.border = `1px solid ${borderColor}`;
+      hotspotDiv.style.opacity = '0.9'; // More opaque overlays
 
       document.body.appendChild(hotspotDiv);
   });
-  console.log("Hotspot region overlays appended.");
+  console.log("Hotspot region overlays appended (color-coded by rank).");
 }
 
 function clearHotspotOverlays() {

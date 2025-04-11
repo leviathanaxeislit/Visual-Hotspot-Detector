@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import base64
 import io
+import mediapipe as mp  # Import Mediapipe
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -34,13 +35,24 @@ class HotspotResponse(BaseModel):
     message: str
     saliency_map_base64: str = None
     hotspot_regions: list = []
-    hotspot_scores: dict = {} 
+    face_regions: list = [] # Add face_regions to response (optional)
+    hotspot_scores: dict = {} # Include hotspot scores for debugging/visualization
+
+
+# Initialize Mediapipe Face Detection model (initialize globally for efficiency)
+mp_face_detection = mp.solutions.face_detection
+face_detection_model = mp_face_detection.FaceDetection(
+    model_selection=1,  # 0 or 1 (0 for short-range, 1 for full-range) - 1 is generally better
+    min_detection_confidence=0.5 # Confidence threshold for detections
+)
+
 
 @app.post("/hotspots", response_model=HotspotResponse)
 async def detect_hotspots(request: HotspotRequest):
     """
     Endpoint to receive image and DOM data, compute Spectral Residual Saliency,
-    incorporate DOM heuristics, extract hotspot regions, and return bounding boxes.
+    incorporate DOM heuristics and BlazeFace detection, extract hotspot regions,
+    and return bounding boxes using HYBRID SCORING.
     """
     try:
         image_data = base64.b64decode(request.image_base64)
@@ -51,13 +63,6 @@ async def detect_hotspots(request: HotspotRequest):
             raise HTTPException(status_code=400, detail="Invalid image data")
 
         dom_data = request.dom_data # Access DOM data from request
-        print("\n--- Received DOM Data from Plugin ---")
-        if dom_data:
-            for element_data in dom_data:
-                print(f"  Tag: {element_data['tag_name']}, BBox: {element_data['bounding_box']}, Text: {element_data.get('text_content', 'No Text')[:50]}...") # Print first 50 chars of text
-        else:
-            print("  No DOM data received.")
-        print("--- End of DOM Data ---\n")
 
         # --- 1. Initialize Spectral Residual Saliency Algorithm ---
         saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
@@ -81,7 +86,7 @@ async def detect_hotspots(request: HotspotRequest):
         hotspot_scores = {} # Dictionary to store scores for each region (bbox: score)
         for i, contour in enumerate(contours): # Enumerate contours for indexing
             x, y, w, h = cv2.boundingRect(contour)
-            bbox = [int(x), int(y), int(x + w), int(y + h)]
+            bbox = [int(x), int(y), int(x + w), int(x + h)]
             hotspot_regions_bbox.append(bbox)
             # Initial score based on average saliency in the region (you can refine this)
             mask = np.zeros_like(saliency_map, dtype=np.uint8)
@@ -89,28 +94,55 @@ async def detect_hotspots(request: HotspotRequest):
             mean_saliency = cv2.mean(saliency_map, mask=mask)[0] # Get mean saliency within contour
             hotspot_scores[tuple(bbox)] = mean_saliency # Store score, use tuple for bbox as key
 
-        # --- 6. Incorporate DOM Heuristics to Adjust Hotspot Scores ---
-        dom_boost_factor = 2.0 # Example boost factor for DOM-important elements
-        if dom_data: # Check if dom_data is not empty
+        # --- 6. Face Detection using BlazeFace (Mediapipe) ---
+        face_detection_result = face_detection_model.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)) # Mediapipe expects RGB input
+
+        detected_faces_bbox = [] # List to store bounding boxes of detected faces
+        if face_detection_result.detections:
+            for detection in face_detection_result.detections:
+                bboxC = detection.location_data.relative_bounding_box # Relative bounding box
+                ih, iw, ic = img.shape # Image height, width, channels
+                bbox = int(bboxC.xmin * iw), int(bboxC.ymin * ih), int((bboxC.xmin + bboxC.width) * iw), int((bboxC.ymin + bboxC.height) * ih)
+                detected_faces_bbox.append(bbox) # Store face bounding box [x1, y1, x2, y2]
+
+        print(f"Number of faces detected by BlazeFace: {len(detected_faces_bbox)}") # Log face detection count
+
+
+        # --- 7. Incorporate DOM Heuristics and Face Detection for HYBRID SCORING ---
+        dom_boost_factor = 1.5 # Reduced DOM boost factor slightly
+        face_boost_factor = 2.5 # Example boost factor for face regions
+
+        if dom_data:
             for dom_element in dom_data:
                 tag_name = dom_element['tag_name']
                 element_bbox = dom_element['bounding_box'] # [left, top, right, bottom] from JS
-                element_bbox_tuple = tuple(map(int, element_bbox)) # Convert to tuple of ints for comparison
+                element_bbox_tuple = tuple(map(int, element_bbox))
 
                 # Check if DOM element's bounding box overlaps with any saliency-based hotspot region
-                for bbox_tuple in list(hotspot_scores.keys()): # Iterate over a copy of keys to allow modification
-                    if check_bbox_overlap(element_bbox, bbox_tuple): # Function to check overlap (see below)
-                        # Boost score of overlapping hotspot region based on DOM element type
-                        if tag_name in ['input', 'button', 'a', 'nav', 'form', 'textarea', 'select']: # Example important tags
+                for bbox_tuple in list(hotspot_scores.keys()):
+                    if check_bbox_overlap(element_bbox, bbox_tuple):
+                        if tag_name in ['input', 'button', 'a', 'nav', 'form', 'textarea', 'select']:
+                            original_score = hotspot_scores[bbox_tuple]
                             hotspot_scores[bbox_tuple] *= dom_boost_factor # Boost score
-                            print(f"Boosted hotspot score for region {bbox_tuple} due to DOM element: {tag_name}")
+                            boosted_score = hotspot_scores[bbox_tuple]
+                            print(f"Boosted hotspot score for region {bbox_tuple} from {original_score:.4f} to {boosted_score:.4f} due to DOM element: {tag_name}")
+
+        if detected_faces_bbox: # Check if faces were detected
+            for face_bbox in detected_faces_bbox:
+                face_bbox_tuple = tuple(map(int, face_bbox))
+                for bbox_tuple in list(hotspot_scores.keys()):
+                    if check_bbox_overlap(face_bbox, bbox_tuple):
+                        original_score = hotspot_scores[bbox_tuple]
+                        hotspot_scores[bbox_tuple] *= face_boost_factor # Boost score for face regions
+                        boosted_score = hotspot_scores[bbox_tuple]
+                        print(f"Boosted hotspot score for region {bbox_tuple} from {original_score:.4f} to {boosted_score:.4f} due to FACE detection.")
 
 
-        # --- 7. Sort Hotspot Regions by Score (Descending) ---
-        ranked_hotspot_regions = sorted(hotspot_scores.keys(), key=hotspot_scores.get, reverse=True)
-        ranked_hotspot_regions_bbox = [list(bbox) for bbox in ranked_hotspot_regions] # Convert back to list of lists
+        # --- 8. Rank Hotspot Regions by HYBRID SCORE (Saliency + DOM + Face Boost) ---
+        ranked_hotspot_regions = sorted(hotspot_scores.keys(), key=hotspot_scores.get, reverse=True) # Rank ALL hotspots by their combined scores
+        ranked_hotspot_regions_bbox = [list(bbox) for bbox in ranked_hotspot_regions]
 
-        # --- 8. Convert Saliency Map to Grayscale Image (uint8) for visualization (optional) ---
+        # --- 9. Convert Saliency Map to Grayscale Image (uint8) for visualization (optional) ---
         saliency_map_normalized = (saliency_map * 255).astype(np.uint8)
         saliency_map_grayscale = cv2.cvtColor(saliency_map_normalized, cv2.COLOR_GRAY2BGR)
         is_success, im_buf_arr = cv2.imencode(".png", saliency_map_grayscale)
@@ -119,22 +151,23 @@ async def detect_hotspots(request: HotspotRequest):
 
 
         # --- For now, print a success message and number of hotspot regions ---
-        print("Spectral Residual Saliency Map computed, Hotspot Regions extracted, and DOM Heuristics applied!")
-        print(f"Number of Hotspot Regions (after DOM boost): {len(ranked_hotspot_regions_bbox)}")
+        print("Spectral Residual Saliency Map computed, Hotspot Regions extracted, DOM Heuristics and Face Detection applied (HYBRID SCORING)!")
+        print(f"Number of Hotspot Regions (after Hybrid Scoring): {len(ranked_hotspot_regions_bbox)}")
 
         # --- Return Response with base64 encoded saliency map and RANKED hotspot regions ---
         return HotspotResponse(
-            message="Spectral Residual Saliency computed, Hotspot Regions extracted, and DOM Heuristics applied.",
+            message="Spectral Residual Saliency computed, Hotspot Regions extracted, DOM Heuristics and Face Detection applied (HYBRID SCORING).",
             saliency_map_base64=saliency_map_base64_str, # Keep saliency map for visualization if needed
             hotspot_regions=ranked_hotspot_regions_bbox, # Return RANKED list of hotspot bounding boxes
-            hotspot_scores=hotspot_scores
+            face_regions=detected_faces_bbox, # Return face bounding boxes (optional)
+            hotspot_scores=hotspot_scores # Return hotspot scores for debugging/visualization
         )
 
     except HTTPException as http_exc:
         raise http_exc
     except Exception as e:
         print(f"Error processing image: {e}")
-        raise HTTPException(status_code=500, detail="Error during saliency computation or hotspot extraction/DOM processing: {e}")
+        raise HTTPException(status_code=500, detail="Error during saliency computation or hotspot extraction/DOM/Face processing: {e}")
 
 
 def check_bbox_overlap(bbox1, bbox2):

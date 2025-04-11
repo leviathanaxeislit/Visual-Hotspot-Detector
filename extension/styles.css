@@ -1,19 +1,28 @@
-/* styles.css */
+/* styles.css - Example 3: Outline Focused */
 .hotspot-overlay {
-    /* Basic styling from content.js */
     position: absolute;
-    background-color: rgba(255, 0, 0, 0.4); /* Semi-transparent red */
-    border: 1px solid red; /* Red border */
+    background-color: transparent; /* No background fill */
+    border: 2px solid #FF4081; /* Vibrant pink/magenta outline */
+    border-radius: 6px; /* Slightly more rounded corners */
+    pointer-events: none;
     z-index: 1001;
-    pointer-events: none; /* Non-interactive */
-  
-    /* Optional: Add transitions for smoother appearance */
-    transition: opacity 0.3s ease-in-out;
-    opacity: 0.4; /* Initial opacity */
+    transition: border-color 0.2s ease-in-out, border-width 0.2s ease-in-out; /* Smooth border transitions */
+    opacity: 0.9;
   }
   
-.hotspot-overlay:hover {
-    opacity: 0.8;
-  } 
+  /* Hover effect - thicker border on hover */
+  .hotspot-overlay:hover {
+    border-width: 3px; /* Thicker border on hover */
+    border-color: #FF80AB; /* Lighter pink on hover */
+  }
   
- 
+  /* Rank-based border color variations */
+  .hotspot-overlay.rank-top {
+    border-color: #4CAF50; /* Green for top rank */
+  }
+  
+  .hotspot-overlay.rank-medium {
+    border-color: #FFC107; /* Amber/Yellow for medium rank */
+  }
+  
+  /* Default style for lower ranks (already defined in .hotspot-overlay - using pink outline) */
