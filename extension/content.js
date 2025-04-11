@@ -38,7 +38,7 @@ async function fetchHotspots() {
             // --- Display Hotspot Regions ---
             if (data.hotspot_regions && data.hotspot_regions.length > 0) {
                 console.log(`Received ${data.hotspot_regions.length} hotspot regions.`);
-                displayHotspotRegions(data.hotspot_regions);
+                displayHotspotRegions(data.hotspot_regions, data.hotspot_scores);
             } else {
                 console.log("No hotspot regions received from API.");
                 clearHotspotOverlays();
@@ -70,24 +70,34 @@ function extractDOMData() {
 }
 
 
-function displayHotspotRegions(regions) {
-    clearHotspotOverlays();
-    regions.forEach(region => {
-        const [x1, y1, x2, y2] = region;
-        const hotspotDiv = document.createElement('div');
-        hotspotDiv.className = 'hotspot-overlay';
-        hotspotDiv.style.position = 'absolute';
-        hotspotDiv.style.left = `${x1}px`;
-        hotspotDiv.style.top = `${y1}px`;
-        hotspotDiv.style.width = `${x2 - x1}px`;
-        hotspotDiv.style.height = `${y2 - y1}px`;
-        hotspotDiv.style.backgroundColor = 'rgba(255, 0, 0, 0.4)';
-        hotspotDiv.style.border = '1px solid red';
-        hotspotDiv.style.zIndex = '1001';
-        hotspotDiv.style.pointerEvents = 'none';
-        document.body.appendChild(hotspotDiv);
-    });
-    console.log("Hotspot region overlays appended.");
+function displayHotspotRegions(regions, scores) { // Receive scores as well
+  clearHotspotOverlays();
+  regions.forEach((region, index) => { // Index is the rank (position in sorted list)
+      const [x1, y1, x2, y2] = region;
+      const hotspotDiv = document.createElement('div');
+      hotspotDiv.className = 'hotspot-overlay';
+      hotspotDiv.style.position = 'absolute';
+      hotspotDiv.style.left = `${x1}px`;
+      hotspotDiv.style.top = `${y1}px`;
+      hotspotDiv.style.width = `${x2 - x1}px`;
+      hotspotDiv.style.height = `${y2 - y1}px`;
+      hotspotDiv.style.pointerEvents = 'none';
+      hotspotDiv.style.zIndex = '1001';
+
+      let color = 'rgba(255, 0, 0, 0.4)'; // Default red
+      if (index < 3) { // Top 3 hotspots - Bright red
+          color = 'rgba(255, 0, 0, 0.8)';
+      } else if (index < 8) { // Next 5 - Orange
+          color = 'rgba(255, 165, 0, 0.6)'; // Orange
+      } else { // Rest - Yellow
+          color = 'rgba(255, 255, 0, 0.4)'; // Yellow
+      }
+      hotspotDiv.style.backgroundColor = color;
+      hotspotDiv.style.border = `1px solid ${color.replace('0.4', '0.8').replace('0.6', '0.8')}`; // Darker border
+
+      document.body.appendChild(hotspotDiv);
+  });
+  console.log("Hotspot region overlays appended.");
 }
 
 function clearHotspotOverlays() {

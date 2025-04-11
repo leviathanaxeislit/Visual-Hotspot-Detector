@@ -34,6 +34,7 @@ class HotspotResponse(BaseModel):
     message: str
     saliency_map_base64: str = None
     hotspot_regions: list = []
+    hotspot_scores: dict = {} 
 
 @app.post("/hotspots", response_model=HotspotResponse)
 async def detect_hotspots(request: HotspotRequest):
@@ -125,7 +126,8 @@ async def detect_hotspots(request: HotspotRequest):
         return HotspotResponse(
             message="Spectral Residual Saliency computed, Hotspot Regions extracted, and DOM Heuristics applied.",
             saliency_map_base64=saliency_map_base64_str, # Keep saliency map for visualization if needed
-            hotspot_regions=ranked_hotspot_regions_bbox # Return RANKED list of hotspot bounding boxes
+            hotspot_regions=ranked_hotspot_regions_bbox, # Return RANKED list of hotspot bounding boxes
+            hotspot_scores=hotspot_scores
         )
 
     except HTTPException as http_exc:
