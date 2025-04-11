@@ -1,117 +1,73 @@
-console.log("Hotspot analysis initiated.");
+console.log("Content script loaded");
 
-function computeAdvancedAttentionScore(element) {
-  const rect = element.getBoundingClientRect();
-  if (!element.offsetParent || rect.width < 10 || rect.height < 10) return 0;
+// Function to fetch hotspots from the API
+async function fetchHotspots() {
+    console.log("Fetching hotspots - requesting screenshot from background script...");
 
-  const styles = window.getComputedStyle(element);
-  const tag = element.tagName.toUpperCase();
+    chrome.runtime.sendMessage({ action: "captureScreenshot" }, async function(response) {
+        if (chrome.runtime.lastError || response.error) {
+            console.error("Error capturing screenshot from background script:", chrome.runtime.lastError || response.error);
+            return;
+        }
 
-  const size = rect.width * rect.height;
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
-  const centerBias = 1 - (
-    Math.abs(centerX - window.innerWidth / 2) / (window.innerWidth / 2) +
-    Math.abs(centerY - window.innerHeight / 2) / (window.innerHeight / 2)
-  ) / 2;
+        const dataUrl = response.dataUrl;
+        const base64ImageData = dataUrl.split(',')[1];
 
-  function hexToRgb(hex) {
-    const match = hex.replace('#', '').match(/.{1,2}/g);
-    return match ? match.map(x => parseInt(x, 16)) : [255, 255, 255];
-  }
+        // Send base64 image to FastAPI backend (rest of your fetchHotspots code remains the same)
+        try {
+            const apiResponse = await fetch('http://localhost:8000/hotspots', { // Adjust URL if needed
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_base64: base64ImageData })
+            });
 
-  function getLuminance(r, g, b) {
-    const a = [r, g, b].map(v => {
-      v /= 255;
-      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+            if (!apiResponse.ok) {
+                throw new Error(`HTTP error! status: ${apiResponse.status}`);
+            }
+
+            const data = await apiResponse.json();
+            console.log("API Response:", data);
+
+            if (data.saliency_map_base64) {
+                console.log("Saliency map received, displaying...");
+                displaySaliencyMap(data.saliency_map_base64);
+            } else {
+                console.log("No saliency map data received from API.");
+            }
+
+        } catch (error) {
+            console.error("Error fetching hotspots:", error);
+        }
     });
-    return 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
-  }
-
-  function getContrastScore(fg, bg) {
-    const rgbFg = hexToRgb(fg);
-    const rgbBg = hexToRgb(bg);
-    const lum1 = getLuminance(...rgbFg);
-    const lum2 = getLuminance(...rgbBg);
-    const contrastRatio = (Math.max(lum1, lum2) + 0.05) / (Math.min(lum1, lum2) + 0.05);
-    return Math.min(1, contrastRatio / 21);
-  }
-
-  const contrast = getContrastScore(styles.color, styles.backgroundColor);
-  const fontSize = parseFloat(styles.fontSize) || 0;
-  const fontWeight = styles.fontWeight === 'bold' || parseInt(styles.fontWeight) > 600 ? 1 : 0;
-  const visibilityScore = (centerBias + contrast + fontSize / 100 + fontWeight) / 4;
-
-  const text = element.innerText || '';
-  const wordCount = text.split(/\s+/).length;
-  const isClickable = ['A', 'BUTTON', 'INPUT'].includes(tag) || styles.cursor === 'pointer';
-
-  const tagPriority = {
-    H1: 1, H2: 0.95, H3: 0.9, IMG: 0.85, A: 0.8,
-    BUTTON: 0.8, LABEL: 0.7, SPAN: 0.4, P: 0.6, DIV: 0.3
-  }[tag] || 0.2;
-
-  const densityPenalty = wordCount > 50 ? 0.5 : 1;
-  const semanticScore = (tagPriority + (isClickable ? 0.5 : 0) + densityPenalty) / 3;
-
-  const yBias = rect.top / window.innerHeight;
-  const fixationScore = 1 - yBias;
-
-  const finalScore = (
-    0.4 * visibilityScore +
-    0.35 * semanticScore +
-    0.25 * fixationScore
-  );
-
-  return finalScore;
 }
 
-function highlightHotspots() {
-    const all = [...document.body.querySelectorAll('*')];
-    console.log(`Total elements scanned: ${all.length}`);
-  
-    let count = 0;
-  
-    all.forEach((el) => {
-      const score = computeAdvancedAttentionScore(el);
-      const rect = el.getBoundingClientRect();
-  
-      // Log scores
-      console.log(`[${el.tagName}] Score: ${score.toFixed(2)} | Text: "${el.innerText?.slice(0, 30)}"`);
-  
-      // Lower threshold for testing
-      if (score > 0.3 && rect.width > 5 && rect.height > 5) {
-        count++;
-  
-        const overlay = document.createElement("div");
-        overlay.style.position = "absolute";
-        overlay.style.left = `${rect.left + window.scrollX}px`;
-        overlay.style.top = `${rect.top + window.scrollY}px`;
-        overlay.style.width = `${rect.width}px`;
-        overlay.style.height = `${rect.height}px`;
-        overlay.style.backgroundColor = `rgba(255, 0, 0, ${Math.min(score, 0.7)})`;
-        overlay.style.border = "1px solid yellow";
-        overlay.style.pointerEvents = "none";
-        overlay.style.zIndex = 2147483647;
-  
-        document.body.appendChild(overlay);
-      }
-    });
-  
-    console.log(`🔥 Hotspots highlighted: ${count}`);
-  
-    // Add green test box to verify overlays render
-    const testBox = document.createElement("div");
-    testBox.style.position = "absolute";
-    testBox.style.left = "100px";
-    testBox.style.top = "100px";
-    testBox.style.width = "100px";
-    testBox.style.height = "100px";
-    testBox.style.backgroundColor = "rgba(0, 255, 0, 0.4)";
-    testBox.style.zIndex = 2147483647;
-    testBox.style.pointerEvents = "none";
-    testBox.textContent = "Test Box";
-    document.body.appendChild(testBox);
-  }
-  
-highlightHotspots();
+function displaySaliencyMap(base64SaliencyMap) {
+    console.log("Displaying saliency map...");
+    // ... (displaySaliencyMap function - keep it the same as before) ...
+    const saliencyMapImg = document.createElement('img');
+    saliencyMapImg.src = `data:image/png;base64,${base64SaliencyMap}`;
+    saliencyMapImg.style.position = 'absolute';
+    saliencyMapImg.style.top = '0';
+    saliencyMapImg.style.left = '0';
+    saliencyMapImg.style.width = '100%';
+    saliencyMapImg.style.height = '100%';
+    saliencyMapImg.style.pointerEvents = 'none';
+    saliencyMapImg.style.opacity = '0.5';
+    saliencyMapImg.style.zIndex = '1000';
+    document.body.appendChild(saliencyMapImg);
+    console.log("Saliency map image appended to body.");
+}
+
+// Listen for messages from popup or background script to trigger hotspot detection
+chrome.runtime.onMessage.addListener(
+    function(request, sender, sendResponse) {
+        if (request.action === "detectHotspots") {
+            console.log("Detect hotspots action received in content script.");
+            fetchHotspots();
+            sendResponse({}); // Send empty response back to popup (optional but good practice)
+            return true; // Indicate you wish to send a response asynchronously
+        }
+    }
+);
+
+console.log("Content script is ready to receive messages.");
