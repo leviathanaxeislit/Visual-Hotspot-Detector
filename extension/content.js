@@ -13,7 +13,7 @@ async function fetchHotspots() {
         const dataUrl = response.dataUrl;
         const base64ImageData = dataUrl.split(',')[1];
 
-        // Send base64 image to FastAPI backend (rest of your fetchHotspots code remains the same)
+        // Send base64 image to FastAPI backend
         try {
             const apiResponse = await fetch('http://localhost:8000/hotspots', { // Adjust URL if needed
                 method: 'POST',
@@ -28,11 +28,14 @@ async function fetchHotspots() {
             const data = await apiResponse.json();
             console.log("API Response:", data);
 
-            if (data.saliency_map_base64) {
-                console.log("Saliency map received, displaying...");
-                displaySaliencyMap(data.saliency_map_base64);
+            // --- Display Hotspot Regions ---
+            if (data.hotspot_regions && data.hotspot_regions.length > 0) {
+                console.log(`Received ${data.hotspot_regions.length} hotspot regions.`);
+                displayHotspotRegions(data.hotspot_regions);
             } else {
-                console.log("No saliency map data received from API.");
+                console.log("No hotspot regions received from API.");
+                // Optionally, clear any existing overlays if no hotspots are found
+                clearHotspotOverlays();
             }
 
         } catch (error) {
@@ -41,22 +44,39 @@ async function fetchHotspots() {
     });
 }
 
-function displaySaliencyMap(base64SaliencyMap) {
-    console.log("Displaying saliency map...");
-    // ... (displaySaliencyMap function - keep it the same as before) ...
-    const saliencyMapImg = document.createElement('img');
-    saliencyMapImg.src = `data:image/png;base64,${base64SaliencyMap}`;
-    saliencyMapImg.style.position = 'absolute';
-    saliencyMapImg.style.top = '0';
-    saliencyMapImg.style.left = '0';
-    saliencyMapImg.style.width = '100%';
-    saliencyMapImg.style.height = '100%';
-    saliencyMapImg.style.pointerEvents = 'none';
-    saliencyMapImg.style.opacity = '0.5';
-    saliencyMapImg.style.zIndex = '1000';
-    document.body.appendChild(saliencyMapImg);
-    console.log("Saliency map image appended to body.");
+// Function to display hotspot regions on the page
+function displayHotspotRegions(regions) {
+    // Clear any existing hotspot overlays first
+    clearHotspotOverlays();
+
+    // Create and append a div for each hotspot region
+    regions.forEach(region => {
+        const [x1, y1, x2, y2] = region;
+        const hotspotDiv = document.createElement('div');
+
+        hotspotDiv.className = 'hotspot-overlay'; // Add a class for styling
+        hotspotDiv.style.position = 'absolute';
+        hotspotDiv.style.left = `${x1}px`;
+        hotspotDiv.style.top = `${y1}px`;
+        hotspotDiv.style.width = `${x2 - x1}px`;
+        hotspotDiv.style.height = `${y2 - y1}px`;
+        hotspotDiv.style.backgroundColor = 'rgba(255, 0, 0, 0.4)'; // Example: Semi-transparent red
+        hotspotDiv.style.border = '2px solid red'; // Example: Red border
+        hotspotDiv.style.zIndex = '1001'; // Ensure it's above saliency map if both displayed
+        hotspotDiv.style.pointerEvents = 'none'; // Make non-interactive
+
+        document.body.appendChild(hotspotDiv);
+    });
+    console.log("Hotspot region overlays appended.");
 }
+
+// Function to clear existing hotspot overlays
+function clearHotspotOverlays() {
+    const existingOverlays = document.querySelectorAll('.hotspot-overlay');
+    existingOverlays.forEach(overlay => overlay.remove());
+    console.log("Existing hotspot overlays cleared.");
+}
+
 
 // Listen for messages from popup or background script to trigger hotspot detection
 chrome.runtime.onMessage.addListener(

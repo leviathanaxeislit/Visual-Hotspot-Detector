@@ -1,0 +1,19 @@
+/* styles.css */
+.hotspot-overlay {
+    /* Basic styling from content.js */
+    position: absolute;
+    background-color: rgba(255, 0, 0, 0.4); /* Semi-transparent red */
+    border: 1px solid red; /* Red border */
+    z-index: 1001;
+    pointer-events: none; /* Non-interactive */
+  
+    /* Optional: Add transitions for smoother appearance */
+    transition: opacity 0.3s ease-in-out;
+    opacity: 0.4; /* Initial opacity */
+  }
+  
+.hotspot-overlay:hover {
+    opacity: 0.8;
+  } 
+  
+ 
