@@ -2,71 +2,162 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Hotspot Detector</title>
+  <title>Visual Attention Analyzer</title>
   <style>
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      width: 260px;
-      padding: 20px;
-      background: linear-gradient(to bottom right, #fdfbfb, #ebedee);
+      width: 300px;
+      margin: 0;
+      padding: 0;
+      background: #f9f9fb;
       color: #333;
-      border-radius: 12px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
-
-    h1 {
-      font-size: 18px;
+    
+    .container {
+      padding: 20px;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #4A90E2, #5637D9);
+      color: white;
+      padding: 16px 20px;
+      border-radius: 8px 8px 0 0;
       text-align: center;
-      margin-bottom: 20px;
-      color: #1a1a1a;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
-
-    button {
-      width: 100%;
-      padding: 10px 16px;
-      font-size: 14px;
+    
+    .logo {
+      font-size: 22px;
       font-weight: bold;
+      margin-bottom: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .logo-icon {
+      margin-right: 8px;
+      font-size: 24px;
+    }
+    
+    .subtitle {
+      font-size: 12px;
+      opacity: 0.9;
+      font-weight: normal;
+    }
+    
+    .content {
+      padding: 20px;
+      background: white;
+      border-radius: 0 0 8px 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+    
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    button {
+      padding: 12px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+    
+    .btn-primary {
       background-color: #4A90E2;
       color: white;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: background-color 0.3s ease;
     }
-
-    button:hover {
+    
+    .btn-primary:hover {
       background-color: #357ABD;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(74, 144, 226, 0.3);
     }
-
+    
+    .btn-secondary {
+      background-color: #f1f3f5;
+      color: #555;
+    }
+    
+    .btn-secondary:hover {
+      background-color: #e9ecef;
+      transform: translateY(-1px);
+    }
+    
+    .btn-icon {
+      margin-right: 8px;
+      font-size: 16px;
+    }
+    
     #status {
       margin-top: 15px;
       text-align: center;
       font-size: 14px;
-      color: #444;
+      color: #555;
+      min-height: 20px;
     }
-
+    
     .spinner {
       margin: 12px auto 0;
       width: 24px;
       height: 24px;
-      border: 4px solid rgba(0,0,0,0.1);
-      border-top: 4px solid #4A90E2;
+      border: 3px solid rgba(74, 144, 226, 0.2);
+      border-top: 3px solid #4A90E2;
       border-radius: 50%;
       animation: spin 1s linear infinite;
       display: none;
     }
-
+    
     @keyframes spin {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
+    
+    .footer {
+      margin-top: 16px;
+      text-align: center;
+      font-size: 11px;
+      color: #888;
+    }
   </style>
 </head>
 <body>
-  <h1>🔥 Hotspot Detector</h1>
-  <button id="detectButton">Detect Hotspots</button>
-  <div id="status"></div>
-  <div class="spinner" id="spinner"></div>
+  <div class="container">
+    <div class="header">
+      <div class="logo">
+        <span class="logo-icon">👁️</span>
+        <span>Visual Attention Analyzer</span>
+      </div>
+      <div class="subtitle">Advanced hotspot & attention detection</div>
+    </div>
+    
+    <div class="content">
+      <div class="actions">
+        <button id="detectButton" class="btn-primary">
+          <span class="btn-icon">🔍</span>
+          Analyze Page Attention
+        </button>
+        <button id="clearButton" class="btn-secondary">
+          <span class="btn-icon">🗑️</span>
+          Clear Visualizations
+        </button>
+      </div>
+      <div id="status"></div>
+      <div class="spinner" id="spinner"></div>
+      <div class="footer">
+        Accurately identifies key attention regions and visual hotspots
+      </div>
+    </div>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>
