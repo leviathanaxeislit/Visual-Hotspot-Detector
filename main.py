@@ -397,6 +397,10 @@ def create_attention_heatmap(img: np.ndarray, hotspot_regions: List[List[int]],
     
     return blended
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 @app.post("/hotspots", response_model=HotspotResponse)
 async def detect_hotspots(request: HotspotRequest):
     """
