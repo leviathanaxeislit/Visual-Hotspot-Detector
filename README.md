@@ -2,7 +2,15 @@
 
 A powerful Chrome extension that analyzes webpages to detect visual hotspots, predict eye movement patterns, and visualize user attention using computer vision and DOM analysis.
 
+## Demo Link
 
+### Youtube Video Link:
+[<img src="https://i.ytimg.com/vi/L-xTkwNaORw/maxresdefault.jpg">](https://www.youtube.com/watch?v=L-xTkwNaORw)
+
+
+## Presentation
+
+[Download Presentation](./docs/ClarityUX Assessment PPT.pptx)
 
 ## Features
 
@@ -28,13 +36,13 @@ The extension captures a screenshot of the current webpage, extracts DOM informa
 
 ### Prerequisites
 - Chrome browser
-- Python 3.8+ (for the backend server)
-- Node.js and npm (optional, for development)
+- Python 3.12 (for the backend server)
+- 
 
 ### Extension Setup
 1. Clone this repository:
-   ```
-   git clone https://github.com/yourusername/visual-attention-analyzer.git
+   ```bash
+   git clone https://github.com/leviathanaxeislit/Visual-Hotspot-Detector.git
    ```
 
 2. Load the extension in Chrome:
@@ -49,8 +57,8 @@ The extension captures a screenshot of the current webpage, extracts DOM informa
    ```
 
 2. Start the backend server:
-   ```
-   cd visual-attention-analyzer
+   ```bash
+   cd Visual-Hotspot-Detector
    python main.py
    ```
    The server will start at http://localhost:8000
@@ -65,6 +73,17 @@ The extension captures a screenshot of the current webpage, extracts DOM informa
    - Numbered blue dots show the predicted eye movement path
    - Purple outlines indicate detected faces
    - Toggle visualizations using the control panel
+
+## Demo
+
+<image src="/images/screenshot-1744540472449.png"></image>
+<image src="/images/screenshot-1744540562980.png"></image>
+<image src="/images/Screenshot (633).png"></image>
+
+
+## System Architecture
+
+<image src="/images/Architecture.png"></image>
 
 ## Technical Details
 
@@ -116,10 +135,6 @@ To modify the backend:
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgments
 
