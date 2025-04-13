@@ -7,10 +7,9 @@ A powerful Chrome extension that analyzes webpages to detect visual hotspots, pr
 ### Youtube Video Link:
 [<img src="https://i.ytimg.com/vi/L-xTkwNaORw/maxresdefault.jpg">](https://www.youtube.com/watch?v=L-xTkwNaORw)
 
-
 ## Presentation
 
-[Download Presentation](./docs/ClarityUX Assessment PPT.pptx)
+[Download or View Presentation ](https://view.officeapps.live.com/op/view.aspx?src=https%3A%2F%2Fraw.githubusercontent.com%2Fleviathanaxeislit%2FVisual-Hotspot-Detector%2F93cf870c7c824216280dab35b8744537bcca3e53%2Fdocs%2FClarityUX%2520Assessment%2520PPT.pptx&wdOrigin=BROWSELINK)
 
 ## Features
 
