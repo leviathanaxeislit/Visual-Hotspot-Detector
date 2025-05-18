@@ -18,6 +18,7 @@ A powerful Chrome extension that analyzes webpages to detect visual hotspots, pr
 - **Eye Movement Prediction**: Simulates likely user eye movement paths across the page
 - **Attention Heatmap**: Visualizes attention distribution across the entire webpage
 - **DOM-Aware Analysis**: Combines visual saliency with DOM element importance for better accuracy
+- **Figma Design Analysis**: Analyzes exported Figma frames with layer data to predict visual attention on designs before development.
 - **Interactive Visualization Controls**: Toggle different visualization layers on and off
 
 ## How It Works
@@ -26,10 +27,11 @@ The Visual Attention Analyzer uses a hybrid approach combining:
 
 1. **Computer Vision Algorithms**: Spectral Residual saliency detection to identify visually distinct regions
 2. **Face Detection**: MediaPipe face detection to identify human faces as high-attention areas
-3. **DOM Analysis**: Examines webpage structure and element properties to determine importance
-4. **Attention Modeling**: Applies psychological principles like F-pattern reading and center bias
+3. **DOM Analysis (for webpages)**: Examines webpage structure and element properties to determine importance.
+4. **Figma Layer Analysis (for Figma designs)**: Parses exported Figma layer data (type, bounding box, properties) to assess element importance within a design.
+5. **Attention Modeling**: Applies psychological principles like F-pattern reading and center bias
 
-The extension captures a screenshot of the current webpage, extracts DOM information, and sends this data to a Python-based FastAPI backend that processes the image using computer vision techniques. The results are then visualized as overlays on the webpage.
+The extension captures a screenshot of the current webpage, extracts DOM information, and sends this data to a Python-based FastAPI backend that processes the image using computer vision techniques. For Figma designs, an exported image and corresponding layer data are sent to a dedicated backend endpoint for analysis. The results are then visualized as overlays on the webpage (for live analysis) or returned as structured data (for Figma analysis).
 
 ## Installation
 
@@ -64,6 +66,7 @@ The extension captures a screenshot of the current webpage, extracts DOM informa
 
 ## Usage
 
+### Analyzing Live Webpages
 1. Navigate to any webpage you want to analyze
 2. Click the Visual Attention Analyzer extension icon in your browser toolbar
 3. Press the "Analyze Page Attention" button
@@ -72,6 +75,38 @@ The extension captures a screenshot of the current webpage, extracts DOM informa
    - Numbered blue dots show the predicted eye movement path
    - Purple outlines indicate detected faces
    - Toggle visualizations using the control panel
+
+### Analyzing Figma Designs
+The system also supports analyzing exported Figma frames. This requires an image of the frame and its corresponding layer data.
+
+1.  **Export your Figma frame as an image** (e.g., PNG).
+2.  **Extract layer data from your Figma design.** This data should be in a JSON format, where each element includes properties like `id`, `name`, `type`, `bounding_box`, `text_content`, `visible`, `opacity`, etc. (Refer to the `FigmaElement` model in `main.py` for the expected structure).
+3.  **Send the image (as base64) and layer data to the backend API.** You can use a tool like `curl` or a custom script.
+
+    Example `curl` command:
+    ```bash
+    curl -X POST "http://localhost:8000/figma_visual_analysis" \
+         -H "Content-Type: application/json" \
+         -d '{
+               "image_base64": "YOUR_BASE64_ENCODED_IMAGE_STRING",
+               "figma_layer_data": [
+                 { "id": "1:2", "name": "Header Frame", "type": "FRAME", "bounding_box": [0, 0, 1280, 100], "...other_props" },
+                 { "id": "1:3", "name": "CTA Button", "type": "RECTANGLE", "text_content": "Click Me", "bounding_box": [500, 400, 700, 450], "...other_props" }
+                 // ... more layer objects
+               ],
+               "viewport_size": {"width": 1280, "height": 800} // Dimensions of the exported frame image
+             }'
+    ```
+4.  **Interpret the JSON response.** The API will return a JSON object containing:
+    *   `saliency_map_base64`: Base64 encoded saliency map image.
+    *   `attention_heatmap_base64`: Base64 encoded attention heatmap image.
+    *   `hotspot_regions`: List of detected hotspot bounding boxes.
+    *   `face_regions`: List of detected face bounding boxes.
+    *   `eye_movement_path`: Predicted eye movement path.
+    *   `dom_importance` (renamed to `figma_layer_importance` in this context): Scores for individual Figma layers.
+    *   `hotspot_scores`: Scores for each hotspot region.
+
+    This data can be used to programmatically understand attention patterns or to generate visualizations.
 
 ## Demo
 
@@ -93,15 +128,17 @@ The extension captures a screenshot of the current webpage, extracts DOM informa
 - **manifest.json**: Extension configuration file
 
 ### Backend Components
-- **main.py**: FastAPI server implementing the computer vision algorithms
+- **main.py**: FastAPI server implementing the computer vision algorithms.
+    -   `/hotspots`: Endpoint for live webpage analysis.
+    -   `/figma_visual_analysis`: Endpoint for Figma design analysis.
 
 ### Analysis Pipeline
-1. Screenshot capture via Chrome API
-2. DOM element extraction with position and style information
-3. Saliency detection using Spectral Residual algorithm
-4. Face detection using MediaPipe
-5. DOM importance scoring based on element type, content, and position
-6. Hybrid scoring combining visual and semantic importance
+1. Screenshot capture via Chrome API (for live webpages) or image provision (for Figma).
+2. DOM element extraction (for live webpages) or Figma layer data parsing (for Figma designs).
+3. Saliency detection using Spectral Residual algorithm.
+4. Face detection using MediaPipe.
+5. DOM importance scoring (for live webpages) or Figma layer importance scoring (for Figma designs) based on element type, content, and properties.
+6. Hybrid scoring combining visual and semantic importance.
 7. Non-maximum suppression to merge overlapping regions
 8. Eye movement path prediction based on hotspot ranking
 9. Attention heatmap generation
