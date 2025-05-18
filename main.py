@@ -73,6 +73,53 @@ DOM_ELEMENT_WEIGHTS = {
 # Default weight for unlisted elements
 DEFAULT_DOM_WEIGHT = 1.0
 
+# New: Figma layer type weights
+FIGMA_LAYER_WEIGHTS = {
+    'frame': 1.0,
+    'group': 1.0,
+    'rectangle': 1.5, # Often used for buttons or content backgrounds
+    'text': 1.8,      # Text content is usually important
+    'instance': 2.0,  # Component instances can be very important (e.g. buttons, icons)
+    'component': 2.0, # Similar to instances
+    'vector': 1.2,    # Icons or graphical elements
+    'ellipse': 1.2,
+    'line': 1.0,
+    'boolean_operation': 1.0,
+    # Add other Figma layer types as needed
+}
+DEFAULT_FIGMA_WEIGHT = 1.0
+
+class FigmaElement(BaseModel):
+    id: str
+    name: str
+    type: str  # Layer type e.g. FRAME, TEXT, RECTANGLE
+    bounding_box: List[float] # [x1, y1, x2, y2] relative to the frame
+    text_content: Optional[str] = None
+    visible: bool = True
+    opacity: Optional[float] = 1.0
+    children_count: Optional[int] = 0 # Number of direct children, can indicate complexity
+    # We can add more Figma-specific properties like fills, effects, component_properties later
+    # New fields for detailed Figma properties
+    fontSize: Optional[float] = None
+    fontWeight: Optional[float] = None # Figma API typically provides this as a number (e.g., 400, 700)
+    fontName: Optional[Dict[str, str]] = None # e.g., {"family": "Inter", "style": "Regular"}
+    textCase: Optional[str] = None # e.g., "ORIGINAL", "UPPER", "LOWER", "TITLE"
+    lineHeight: Optional[Dict[str, Any]] = None # e.g., {"value": 24, "unit": "PIXELS"}
+    
+    layoutMode: Optional[str] = None # "NONE", "HORIZONTAL", "VERTICAL"
+    primaryAxisSizingMode: Optional[str] = None # "AUTO", "FIXED"
+    counterAxisSizingMode: Optional[str] = None # "AUTO", "FIXED"
+    itemSpacing: Optional[float] = None # Spacing between items in auto-layout
+
+    fillColor: Optional[Dict[str, float]] = None # e.g., {"r": 0, "g": 0, "b": 0} (0-1 scale)
+    fillOpacity: Optional[float] = None
+
+
+class FigmaHotspotRequest(BaseModel):
+    image_base64: str
+    figma_layer_data: List[FigmaElement] = []
+    viewport_size: dict = {"width": 1280, "height": 800} # Viewport of the exported frame
+
 def apply_center_bias(saliency_map: np.ndarray, img_shape: Tuple, sigma: float = 0.33) -> np.ndarray:
     """
     Apply center bias to saliency map (humans tend to look at center of screen).
@@ -397,6 +444,151 @@ def create_attention_heatmap(img: np.ndarray, hotspot_regions: List[List[int]],
     
     return blended
 
+# New: Calculate importance for Figma elements
+def get_figma_element_importance(figma_element: FigmaElement) -> float:
+    """
+    Calculate importance of a Figma element based on its type and properties.
+    """
+    layer_type = figma_element.type.lower()
+    weight = FIGMA_LAYER_WEIGHTS.get(layer_type, DEFAULT_FIGMA_WEIGHT)
+
+    # Boost based on name (e.g., if name contains 'button', 'cta', 'icon', 'image', 'title', 'header')
+    name_lower = figma_element.name.lower()
+    if any(key in name_lower for key in ['button', 'btn', 'cta', 'primary', 'action', 'submit', 'buy', 'shop']):
+        weight *= 1.8
+    elif any(key in name_lower for key in ['icon', 'logo', 'image', 'avatar', 'profile', 'thumbnail', 'illustration']):
+        weight *= 1.5
+    elif any(key in name_lower for key in ['title', 'header', 'headline', 'caption', 'banner', 'hero']):
+        weight *= 1.6
+    elif any(key in name_lower for key in ['menu', 'nav', 'navigation', 'link', 'tab']):
+        weight *= 1.4
+    elif any(key in name_lower for key in ['input', 'form', 'field', 'search']):
+        weight *= 1.3
+
+
+    # Boost for text layers with short, concise text (often labels or CTAs)
+    if layer_type == 'text' and figma_element.text_content:
+        if len(figma_element.text_content) > 0 and len(figma_element.text_content) < 50: # Short text
+            weight *= 1.3
+            # Further boost for all-caps short text
+            if figma_element.textCase == 'UPPER' and len(figma_element.text_content) < 25:
+                 weight *= 1.2
+        elif len(figma_element.text_content) == 0: # Empty text layers are less important
+             weight *= 0.7
+        
+        # Font size boost (relative to a baseline, e.g. 16px)
+        if figma_element.fontSize:
+            if figma_element.fontSize > 24: # Significantly larger text
+                weight *= 1.25
+            elif figma_element.fontSize > 18: # Larger text
+                weight *= 1.1
+            elif figma_element.fontSize < 12: # Very small text, less important
+                weight *= 0.85
+        
+        # Font weight boost
+        if figma_element.fontWeight:
+            if figma_element.fontWeight >= 700: # Bold or heavier
+                weight *= 1.2
+            elif figma_element.fontWeight <= 300: # Light
+                weight *= 0.9
+
+
+    # Boost for visibility and opacity
+    if not figma_element.visible:
+        return 0.01 # Very low importance if not visible
+    if figma_element.opacity is not None and figma_element.opacity < 0.5:
+        weight *= (0.3 + figma_element.opacity) # Scale down if low opacity, but not to zero if visible
+    elif figma_element.opacity is not None and figma_element.opacity < 0.1: # Almost transparent
+        return 0.05
+
+
+    # Boost for component instances and layers with children (complexity/grouping)
+    if layer_type in ['instance', 'component']:
+        weight *= 1.2
+    if figma_element.children_count and figma_element.children_count > 0:
+        # Modest boost, as complex groups don't always mean visual importance of the group itself
+        weight *= (1 + min(figma_element.children_count * 0.02, 0.1)) 
+
+    # Boost for elements with a prominent fill color (not white or very light gray, and high opacity)
+    if figma_element.fillColor:
+        r, g, b = figma_element.fillColor.get('r', 1), figma_element.fillColor.get('g', 1), figma_element.fillColor.get('b', 1)
+        # Avoid boosting for white-ish backgrounds by checking if color is not too light
+        # (Luminance calculation approximation: 0.299*R + 0.587*G + 0.114*B)
+        # If color is "dark" enough (e.g. luminance < 0.8 on 0-1 scale)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        fill_opacity = figma_element.fillOpacity if figma_element.fillOpacity is not None else 1.0
+        
+        if luminance < 0.85 and fill_opacity > 0.7: # Not too light and reasonably opaque
+            weight *= 1.15
+        elif fill_opacity < 0.3: # Very transparent fill
+             weight *= 0.9
+
+
+    # Consider auto-layout properties - e.g. if an element is a key part of a structured layout
+    if figma_element.layoutMode and figma_element.layoutMode != 'NONE':
+        weight *= 1.05 # Slight boost for being part of an auto-layout structure
+
+    return max(0.01, weight) # Ensure a minimum small positive weight if not invisible
+
+# New: Calculate boost for Figma layers (positional, size)
+def calculate_figma_layer_boost(figma_element: FigmaElement, img_shape: Tuple) -> float:
+    """
+    Calculate boost factor for a Figma layer based on its position and size within the frame.
+    """
+    bbox = figma_element.bounding_box
+    
+    # Ensure bounding box has valid dimensions (x1, y1, x2, y2)
+    if not (len(bbox) == 4 and bbox[2] > bbox[0] and bbox[3] > bbox[1]):
+        return 1.0 # No boost for invalid bbox
+
+    element_width = bbox[2] - bbox[0]
+    element_height = bbox[3] - bbox[1]
+    
+    # Skip elements that are very small (likely not important visually)
+    element_area = element_width * element_height
+    viewport_area = img_shape[0] * img_shape[1]
+    
+    if element_area <= 0 or viewport_area <= 0: # Avoid division by zero
+        return 1.0
+
+    if (element_area / viewport_area) < 0.001: # Adjusted threshold for Figma (0.1% of frame area)
+        return 0.8  # Reduced boost for very tiny elements, but not zero
+
+    # F-pattern: higher weight for elements in top third and left half
+    # Assumes img_shape is (height, width)
+    frame_height, frame_width = img_shape[:2]
+    is_in_top_third = bbox[1] < frame_height / 3
+    is_in_left_half = bbox[0] < frame_width / 2
+    
+    f_pattern_boost = 1.0
+    if is_in_top_third:
+        f_pattern_boost += 0.3
+    if is_in_left_half:
+        f_pattern_boost += 0.2
+    
+    # Center bias: elements closer to the center get higher boost
+    center_x = bbox[0] + element_width / 2
+    center_y = bbox[1] + element_height / 2
+    
+    frame_center_x = frame_width / 2
+    frame_center_y = frame_height / 2
+    
+    max_distance = np.sqrt(frame_center_x**2 + frame_center_y**2)
+    if max_distance == 0: max_distance = 1 # Avoid division by zero for tiny frames
+    
+    distance = np.sqrt((center_x - frame_center_x)**2 + (center_y - frame_center_y)**2)
+    normalized_distance = distance / max_distance
+    
+    center_boost = 1.0 + (1.0 - normalized_distance) * 0.5 # Boost ranges from 1.0 to 1.5
+    
+    # Get base importance from element type and properties
+    element_importance = get_figma_element_importance(figma_element)
+    if element_importance == 0: return 0 # If invisible or deemed unimportant
+
+    final_boost = element_importance * center_boost * f_pattern_boost
+    
+    return max(0.1, final_boost) # Ensure a minimum boost if element is somewhat important
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
@@ -613,6 +805,265 @@ async def detect_hotspots(request: HotspotRequest):
         print(f"Error processing image: {e}")
         raise HTTPException(status_code=500, 
                           detail=f"Error during attention analysis: {str(e)}")
+
+@app.post("/figma_visual_analysis", response_model=HotspotResponse)
+async def figma_detect_hotspots(request: FigmaHotspotRequest):
+    """
+    Endpoint to analyze Figma frame, predict eye movement patterns and detect visual hotspots,
+    using Figma layer data instead of DOM data.
+    """
+    try:
+        image_data = base64.b64decode(request.image_base64)
+        nparr = np.frombuffer(image_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        figma_layer_data = request.figma_layer_data
+        # viewport_size = request.viewport_size # Use img.shape for actual image dimensions
+
+        # 1. INITIALIZE SPECTRAL RESIDUAL SALIENCY ALGORITHM
+        saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
+
+        # 2. COMPUTE SALIENCY MAP
+        (success, saliency_map_cv) = saliency.computeSaliency(img)
+        if not success or saliency_map_cv is None:
+            raise HTTPException(status_code=500, detail="Saliency computation failed")
+        
+        # Ensure saliency map is float
+        saliency_map_cv = saliency_map_cv.astype(np.float32)
+
+
+        # 3. APPLY CENTER BIAS TO SALIENCY MAP
+        saliency_map_biased = apply_center_bias(saliency_map_cv, img.shape)
+
+        # 4. APPLY ADAPTIVE THRESHOLDING
+        # Ensure saliency_map_biased is not empty and has finite values
+        if saliency_map_biased.size == 0 or not np.all(np.isfinite(saliency_map_biased)) :
+            raise HTTPException(status_code=500, detail="Biased saliency map is invalid")
+
+        mean_val = np.mean(saliency_map_biased[np.isfinite(saliency_map_biased)])
+        std_val = np.std(saliency_map_biased[np.isfinite(saliency_map_biased)])
+        thresh_value = mean_val + 1.5 * std_val
+        
+        # Handle cases where std_val might be zero or very small
+        if std_val < 1e-6:
+            thresh_value = mean_val * 1.1 # Fallback threshold
+        if not np.isfinite(thresh_value): # if mean/std were non-finite (e.g. all-zero map)
+             thresh_value = 0.5 # Default if stats are weird
+
+        _, thresh_map = cv2.threshold(saliency_map_biased, thresh_value, 1.0, cv2.THRESH_BINARY) # Output as float 0.0-1.0
+        thresh_map_uint8 = (thresh_map * 255).astype(np.uint8)
+
+
+        # 5. FIND AND FILTER CONTOURS
+        contours, _ = cv2.findContours(thresh_map_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        min_area = img.shape[0] * img.shape[1] * 0.001  # Minimum 0.1% of image area
+        filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
+
+        # 6. EXTRACT BOUNDING BOXES AND INITIAL SCORES FOR HOTSPOTS FROM SALIENCY
+        hotspot_regions_bbox = []
+        hotspot_scores = {} # Using tuple(bbox) as key
+
+        for contour in filtered_contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            bbox = [int(x), int(y), int(x + w), int(y + h)]
+            
+            mask = np.zeros_like(saliency_map_biased, dtype=np.uint8) # Use biased map for scoring
+            cv2.drawContours(mask, [contour], -1, 1, -1) # Binary mask
+            
+            # Calculate mean saliency only on the biased map
+            mean_saliency = cv2.mean(saliency_map_biased, mask=mask)[0]
+
+            region_area = w * h
+            image_area = img.shape[0] * img.shape[1]
+            size_ratio = region_area / image_area if image_area > 0 else 0
+            
+            size_score = 1.0
+            if size_ratio < 0.005: size_score = 0.7 # Penalize very small (less than 0.5%)
+            elif size_ratio > 0.35: size_score = 0.8 # Penalize very large
+
+            center_x_pos = x + w/2
+            center_y_pos = y + h/2
+            img_center_x = img.shape[1] / 2
+            img_center_y = img.shape[0] / 2
+            max_dist = np.sqrt((img.shape[1]/2)**2 + (img.shape[0]/2)**2) if img.shape[0]*img.shape[1] > 0 else 1
+            dist_to_center = np.sqrt((center_x_pos - img_center_x)**2 + (center_y_pos - img_center_y)**2)
+            position_score = 1.0 - (dist_to_center / max_dist) * 0.5 if max_dist > 0 else 0.75
+            
+            initial_score = (0.6 * mean_saliency + 0.2 * size_score + 0.2 * position_score)
+            hotspot_regions_bbox.append(bbox)
+            hotspot_scores[tuple(bbox)] = max(0.01, initial_score) # Ensure positive score
+
+
+        # 7. FACE DETECTION USING MEDIAPIPE
+        face_detection_result = face_detection_model.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        detected_faces_bbox = []
+
+        if face_detection_result.detections:
+            for detection in face_detection_result.detections:
+                bboxC = detection.location_data.relative_bounding_box
+                ih, iw, _ = img.shape
+                face_bbox = [
+                    int(bboxC.xmin * iw), 
+                    int(bboxC.ymin * ih), 
+                    int((bboxC.xmin + bboxC.width) * iw), 
+                    int((bboxC.ymin + bboxC.height) * ih)
+                ]
+                # Ensure face_bbox coordinates are within image bounds and valid
+                face_bbox[0] = max(0, face_bbox[0])
+                face_bbox[1] = max(0, face_bbox[1])
+                face_bbox[2] = min(iw -1, face_bbox[2])
+                face_bbox[3] = min(ih -1, face_bbox[3])
+                if face_bbox[2] <= face_bbox[0] or face_bbox[3] <= face_bbox[1]: continue
+
+                detected_faces_bbox.append(face_bbox)
+                face_bbox_tuple = tuple(face_bbox)
+                
+                face_added_to_hotspots = False
+                for hs_bbox_tuple in list(hotspot_scores.keys()): # Iterate over a copy of keys
+                    if check_bbox_overlap(face_bbox, list(hs_bbox_tuple)):
+                        hotspot_scores[hs_bbox_tuple] = hotspot_scores.get(hs_bbox_tuple, 0.1) * 2.5 # Boost existing
+                        face_added_to_hotspots = True
+                
+                if not face_added_to_hotspots:
+                    hotspot_scores[face_bbox_tuple] = 2.0 # High initial score for new face hotspot
+                    if face_bbox not in hotspot_regions_bbox: # Avoid duplicates if somehow already present
+                        hotspot_regions_bbox.append(face_bbox)
+        
+        # 8. INCORPORATE FIGMA LAYER DATA FOR HYBRID SCORING
+        figma_layer_importance_scores = {} # For storing figma layer based scores, similar to dom_importance
+
+        if figma_layer_data:
+            for f_element in figma_layer_data:
+                if not f_element.visible: continue
+
+                element_bbox = [int(c) for c in f_element.bounding_box] # Ensure int coords
+                # Validate Figma element bounding box against image dimensions
+                element_bbox[0] = max(0, element_bbox[0])
+                element_bbox[1] = max(0, element_bbox[1])
+                element_bbox[2] = min(img.shape[1] - 1, element_bbox[2])
+                element_bbox[3] = min(img.shape[0] - 1, element_bbox[3])
+
+                if element_bbox[2] <= element_bbox[0] or element_bbox[3] <= element_bbox[1]:
+                    continue # Skip invalid or zero-area boxes
+
+                figma_boost = calculate_figma_layer_boost(f_element, img.shape)
+                figma_layer_importance_scores[f_element.id] = figma_boost # Use Figma element ID as key
+
+                if figma_boost <= 0.1: continue # Skip if not deemed important by Figma properties
+
+                element_bbox_tuple = tuple(element_bbox)
+                element_added_or_boosted = False
+                for hs_bbox_tuple in list(hotspot_scores.keys()):
+                    if check_bbox_overlap(element_bbox, list(hs_bbox_tuple)):
+                        hotspot_scores[hs_bbox_tuple] = hotspot_scores.get(hs_bbox_tuple, 0.1) * figma_boost
+                        element_added_or_boosted = True
+                
+                if not element_added_or_boosted and figma_boost > 1.5: # Threshold for adding as new hotspot
+                     # Base score on figma_boost and mean saliency of image
+                    mean_saliency_val = np.mean(saliency_map_biased[np.isfinite(saliency_map_biased)])
+                    if not np.isfinite(mean_saliency_val): mean_saliency_val = 0.1
+
+                    new_score = figma_boost * mean_saliency_val * 0.5 # Modest score contribution
+                    hotspot_scores[element_bbox_tuple] = max(0.1, new_score)
+                    if element_bbox not in hotspot_regions_bbox:
+                         hotspot_regions_bbox.append(element_bbox)
+        
+        # 9. NON-MAXIMUM SUPPRESSION
+        if not hotspot_regions_bbox: # No hotspots found at all
+             # Return empty or minimal response
+            return HotspotResponse(
+                message="No distinct visual hotspots or important Figma elements detected.",
+                saliency_map_base64="", # Or a blank image base64
+                attention_heatmap_base64="",
+                hotspot_regions=[],
+                face_regions=detected_faces_bbox, # Keep faces if any
+                eye_movement_path=[],
+                dom_importance={}, # Empty for Figma context, or use figma_layer_importance_scores
+                hotspot_scores={}
+            )
+
+        # Ensure hotspot_scores keys match current hotspot_regions_bbox before NMS
+        current_hs_tuples = {tuple(b) for b in hotspot_regions_bbox}
+        valid_scores = {k: v for k, v in hotspot_scores.items() if k in current_hs_tuples}
+        
+        # Rebuild score_list based on valid_scores and hotspot_regions_bbox order
+        score_list = [valid_scores.get(tuple(bbox), 0.01) for bbox in hotspot_regions_bbox] # Default to low score if missing
+
+        final_hotspot_regions_bbox = hotspot_regions_bbox
+        final_hotspot_scores = valid_scores
+
+        if len(hotspot_regions_bbox) > 1:
+            keep_indices = non_max_suppression(np.array(hotspot_regions_bbox, dtype=object), np.array(score_list), overlap_thresh=0.4)
+            final_hotspot_regions_bbox = [hotspot_regions_bbox[i] for i in keep_indices]
+            
+            new_scores_after_nms = {}
+            for bbox_idx in keep_indices:
+                bbox_tuple = tuple(hotspot_regions_bbox[bbox_idx])
+                if bbox_tuple in valid_scores: # ensure key exists
+                    new_scores_after_nms[bbox_tuple] = valid_scores[bbox_tuple]
+            final_hotspot_scores = new_scores_after_nms
+        elif not hotspot_regions_bbox: # If all were suppressed or started empty
+            final_hotspot_regions_bbox = []
+            final_hotspot_scores = {}
+
+
+        # 10. GENERATE EYE MOVEMENT PATH
+        eye_movement_path = generate_eye_movement_path(
+            final_hotspot_regions_bbox, 
+            final_hotspot_scores, 
+            img.shape
+        )
+
+        # 11. CREATE ATTENTION HEATMAP
+        attention_heatmap = create_attention_heatmap(
+            img,
+            final_hotspot_regions_bbox,
+            final_hotspot_scores,
+            eye_movement_path
+        )
+
+        # 12. PREPARE VISUALIZATION OUTPUTS (Saliency & Heatmap)
+        # Saliency map for visualization (using the biased one)
+        saliency_map_display = (saliency_map_biased / np.max(saliency_map_biased) * 255).astype(np.uint8) if np.max(saliency_map_biased) > 0 else np.zeros_like(saliency_map_biased, dtype=np.uint8)
+        saliency_map_colormap = cv2.applyColorMap(saliency_map_display, cv2.COLORMAP_JET)
+        is_success, saliency_buf = cv2.imencode(".png", saliency_map_colormap)
+        saliency_base64_str = base64.b64encode(saliency_buf.tobytes()).decode('utf-8') if is_success else ""
+        
+        is_success, heatmap_buf = cv2.imencode(".png", attention_heatmap)
+        heatmap_base64_str = base64.b64encode(heatmap_buf.tobytes()).decode('utf-8') if is_success else ""
+
+        # 13. RANK HOTSPOT REGIONS
+        # Use final_hotspot_scores which keys are tuples
+        ranked_hotspot_tuples = sorted(final_hotspot_scores.keys(), key=final_hotspot_scores.get, reverse=True)
+        ranked_hotspot_regions_list = [list(bbox) for bbox in ranked_hotspot_tuples]
+
+        json_scores = {str(bbox): score for bbox, score in final_hotspot_scores.items()}
+        # Use figma_layer_importance_scores for dom_importance field or rename it in HotspotResponse
+        json_figma_importance = {key: val for key, val in figma_layer_importance_scores.items()}
+
+
+        print(f"Figma Analysis - Hotspots: {len(ranked_hotspot_regions_list)}, Faces: {len(detected_faces_bbox)}, Eye Path Points: {len(eye_movement_path)}")
+
+        return HotspotResponse(
+            message="Figma frame visual analysis completed.",
+            saliency_map_base64=saliency_base64_str,
+            attention_heatmap_base64=heatmap_base64_str,
+            hotspot_regions=ranked_hotspot_regions_list,
+            face_regions=detected_faces_bbox,
+            eye_movement_path=eye_movement_path,
+            dom_importance=json_figma_importance, # Sending Figma layer importance here
+            hotspot_scores=json_scores
+        )
+
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        import traceback
+        print(f"Error processing Figma frame: {e} {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error during Figma attention analysis: {str(e)}")
 
 
 if __name__ == "__main__":

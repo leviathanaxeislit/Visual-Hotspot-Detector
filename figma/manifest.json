@@ -1,0 +1,13 @@
+{
+  "name": "Visual Attention Analyzer",
+  "id": "VISUAL_ATTENTION_ANALYZER_PLUGIN_ID",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["http://localhost:8000"],
+    "devAllowedDomains": ["http://localhost:8000"],
+    "reasoning": "The plugin needs to send image and layer data to the local backend for analysis."
+  }
+} 

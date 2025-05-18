@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Visual Attention Analyzer</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 10px;
+      background-color: #f0f0f0;
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center; 
+      min-height: 100vh; /* Ensure body takes at least full viewport height */
+    }
+    h2 {
+      margin-top: 0;
+    }
+    button {
+      background-color: #007bff;
+      color: white;
+      padding: 10px 15px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      width: calc(100% - 20px); /* Account for body padding */
+      box-sizing: border-box;
+      margin-bottom: 10px;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    #statusMessage {
+      font-size: 12px;
+      color: #555;
+      min-height: 1.2em; /* Reserve space for messages */
+      text-align: center;
+      width: 100%;
+    }
+    #visualizationArea {
+      margin-top: 15px;
+      position: relative; /* For positioning canvas on top of image */
+      width: 100%; /* Container takes full width */
+      max-width: 500px; /* Max width for the image/canvas container */
+      display: flex; /* Use flex to center image if it's smaller than max-width */
+      justify-content: center;
+    }
+    #frameImage, #overlayCanvas {
+      display: block;
+      max-width: 100%; /* Image and canvas scale down if container is smaller */
+      height: auto;    /* Maintain aspect ratio */
+      border: 1px solid #ccc;
+    }
+    #overlayCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none; /* Allow interaction with elements below if any */
+    }
+  </style>
+</head>
+<body>
+  <h2>Visual Attention Analyzer</h2>
+  <button id="analyzeButton">Analyze Selected Frame</button>
+  <p id="statusMessage"></p>
+
+  <div id="visualizationArea">
+    <img id="frameImage" src="" alt="Selected Frame" style="display:none;"/>
+    <canvas id="overlayCanvas"></canvas>
+  </div>
+
+  <script>
+    const analyzeButton = document.getElementById('analyzeButton');
+    const statusMessage = document.getElementById('statusMessage');
+    const frameImage = document.getElementById('frameImage');
+    const overlayCanvas = document.getElementById('overlayCanvas');
+    const ctx = overlayCanvas.getContext('2d');
+
+    analyzeButton.onclick = () => {
+      statusMessage.textContent = 'Processing selected frame...';
+      frameImage.style.display = 'none'; // Hide previous image
+      ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height); // Clear canvas
+      parent.postMessage({ pluginMessage: { type: 'analyze-frame' } }, '*');
+    };
+
+    window.onmessage = (event) => {
+      if (event.data.pluginMessage) {
+        const message = event.data.pluginMessage;
+        if (message.type === 'analysis-complete') {
+          // This message type might no longer be sent from code.js if display-analysis is used for success
+          // statusMessage.textContent = 'Analysis complete!'; 
+        } else if (message.type === 'analysis-error') {
+          statusMessage.textContent = `Error: ${message.error}`;
+          frameImage.style.display = 'none';
+        } else if (message.type === 'status-update') {
+          statusMessage.textContent = message.text;
+        } else if (message.type === 'display-analysis') {
+          statusMessage.textContent = 'Displaying analysis...';
+          const frameData = message.frameData;
+          const results = message.analysisResults;
+
+          // Set image source and wait for it to load to get correct dimensions for canvas
+          frameImage.onload = () => {
+            frameImage.style.display = 'block';
+            // Match canvas dimensions to the *displayed* size of the image
+            overlayCanvas.width = frameImage.clientWidth;
+            overlayCanvas.height = frameImage.clientHeight;
+            
+            // Calculate scale factor if image is scaled in UI vs original dimensions
+            const scaleX = frameImage.clientWidth / frameData.width;
+            const scaleY = frameImage.clientHeight / frameData.height;
+
+            ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            // 1. Draw Attention Heatmap (if available)
+            if (results.attention_heatmap_base64) {
+              const heatmapImg = new Image();
+              heatmapImg.onload = () => {
+                ctx.globalAlpha = 0.5; // Set opacity for heatmap
+                ctx.drawImage(heatmapImg, 0, 0, overlayCanvas.width, overlayCanvas.height);
+                ctx.globalAlpha = 1.0; // Reset opacity
+                drawOverlays(results, scaleX, scaleY); // Draw other overlays on top
+              };
+              heatmapImg.onerror = () => { 
+                console.error('Error loading heatmap image for canvas.');
+                drawOverlays(results, scaleX, scaleY); // Still draw other overlays
+              };
+              heatmapImg.src = 'data:image/png;base64,' + results.attention_heatmap_base64;
+            } else {
+              drawOverlays(results, scaleX, scaleY); // No heatmap, draw other overlays directly
+            }
+          };
+          frameImage.onerror = () => {
+            statusMessage.textContent = 'Error loading frame image.';
+            frameImage.style.display = 'none';
+          };
+          frameImage.src = 'data:image/png;base64,' + frameData.imageBase64;
+        }
+      }
+    };
+
+    function drawOverlays(results, scaleX, scaleY) {
+        // 2. Draw Hotspot Regions
+        if (results.hotspot_regions && Array.isArray(results.hotspot_regions)) {
+            ctx.strokeStyle = 'rgba(255, 128, 0, 0.8)'; // Orange, slightly transparent
+            ctx.lineWidth = 2;
+            results.hotspot_regions.forEach(region => {
+                const [x1, y1, x2, y2] = region;
+                ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+            });
+        }
+
+        // 3. Draw Face Regions
+        if (results.face_regions && Array.isArray(results.face_regions)) {
+            ctx.strokeStyle = 'rgba(128, 0, 128, 0.8)'; // Purple, slightly transparent
+            ctx.lineWidth = 2;
+            results.face_regions.forEach(region => {
+                const [x1, y1, x2, y2] = region;
+                ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+            });
+        }
+
+        // 4. Draw Eye Movement Path
+        if (results.eye_movement_path && Array.isArray(results.eye_movement_path)) {
+            const pathPoints = results.eye_movement_path;
+            ctx.strokeStyle = 'rgba(0, 128, 255, 0.8)'; // Blue
+            ctx.fillStyle = 'rgba(0, 128, 255, 0.8)';
+            ctx.lineWidth = 1.5;
+            
+            for (let i = 0; i < pathPoints.length; i++) {
+                const [x, y] = pathPoints[i];
+                const canvasX = x * scaleX;
+                const canvasY = y * scaleY;
+
+                // Draw circle
+                ctx.beginPath();
+                ctx.arc(canvasX, canvasY, 5, 0, 2 * Math.PI);
+                ctx.fill();
+
+                // Draw number in circle
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 8px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText((i + 1).toString(), canvasX, canvasY);
+                
+                ctx.fillStyle = 'rgba(0, 128, 255, 0.8)'; // Reset fillStyle for next circle if any
+
+                // Draw line to previous point
+                if (i > 0) {
+                    const [prevX, prevY] = pathPoints[i-1];
+                    ctx.beginPath();
+                    ctx.moveTo(prevX * scaleX, prevY * scaleY);
+                    ctx.lineTo(canvasX, canvasY);
+                    ctx.stroke();
+                }
+            }
+        }
+        statusMessage.textContent = 'Analysis displayed.';
+    }
+
+  </script>
+</body>
+</html> 
