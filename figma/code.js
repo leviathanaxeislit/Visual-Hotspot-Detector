@@ -1,4 +1,4 @@
-figma.showUI(__html__, { width: 300, height: 200 });
+figma.showUI(__html__, { width: 800, height: 600 });
 
 const FIGMA_LAYER_TYPE_MAP = {
   FRAME: 'frame',

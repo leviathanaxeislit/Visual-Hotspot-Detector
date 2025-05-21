@@ -315,9 +315,10 @@ def non_max_suppression(boxes: List[List[int]], scores: List[float], overlap_thr
     return pick
 
 def generate_eye_movement_path(hotspot_regions: List[List[int]], hotspot_scores: Dict, 
-                              img_shape: Tuple, num_points: int = 10) -> List[List[int]]:
+                              img_shape: Tuple, num_points: int = 12) -> List[List[int]]:
     """
     Generate a predicted eye movement path based on hotspot regions.
+    Uses cognitive models of visual attention and reading patterns.
     
     Args:
         hotspot_regions: List of hotspot bounding boxes
@@ -331,12 +332,15 @@ def generate_eye_movement_path(hotspot_regions: List[List[int]], hotspot_scores:
     if not hotspot_regions:
         return []
     
-    # Extract center points of hotspots
+    h, w = img_shape[:2]
+    
+    # Calculate hotspot centers and collect their scores
     centers = []
     scores = []
     for region in hotspot_regions:
-        center_x = (region[0] + region[2]) // 2
-        center_y = (region[1] + region[3]) // 2
+        # Calculate center of region
+        center_x = int((region[0] + region[2]) / 2)
+        center_y = int((region[1] + region[3]) / 2)
         centers.append([center_x, center_y])
         
         # Get score for this region
@@ -344,39 +348,92 @@ def generate_eye_movement_path(hotspot_regions: List[List[int]], hotspot_scores:
         score = hotspot_scores.get(region_tuple, 1.0)
         scores.append(score)
     
-    # Add viewport center as starting point (people often start looking at center)
-    h, w = img_shape[:2]
-    centers.insert(0, [w//2, h//3])  # Start slightly above center (common pattern)
-    scores.insert(0, max(scores) * 0.8)  # Give it a reasonably high score
+    # Initialize with entry point - users typically start looking at top-left or center
+    # Mix both to create a realistic starting point slightly above center
+    entry_point = [w // 3, h // 3]  # Start at about 1/3 from top-left, common entry point
+    path = [entry_point]
     
-    # Sort hotspots by score
-    sorted_indices = np.argsort(scores)[::-1]  # Descending order
-    sorted_centers = [centers[i] for i in sorted_indices]
+    # Add points with strategic logic based on cognitive models
+    remaining_hotspots = list(zip(centers, scores))
     
-    # Take top hotspots based on num_points
-    top_centers = sorted_centers[:min(num_points, len(sorted_centers))]
+    # Sort hotspots by importance (score)
+    remaining_hotspots.sort(key=lambda x: x[1], reverse=True)
     
-    # F-pattern reading - add some bias to top-left region (Western reading pattern)
-    # Add a point in top-left quadrant if not already present
-    top_left_present = any(c[0] < w//2 and c[1] < h//2 for c in top_centers)
-    if not top_left_present and len(top_centers) < num_points:
-        top_centers.append([w//4, h//4])  # Add point in top-left quadrant
+    # Extract top N hotspots based on score (where N is num_points - 1 to account for entry point)
+    top_hotspots = remaining_hotspots[:min(num_points - 1, len(remaining_hotspots))]
     
-    # Start from center or top hotspot and create a path
-    path = [top_centers[0]]
-    remaining = top_centers[1:]
+    # First add the most important hotspot after entry point (highest score)
+    if top_hotspots:
+        path.append(top_hotspots[0][0])
+        top_hotspots = top_hotspots[1:]
     
-    # Greedy path construction - go to nearest unvisited hotspot each time
-    while remaining and len(path) < num_points:
+    # Now build a path considering both proximity and importance
+    # This is more realistic than just nearest-neighbor or pure importance
+    while top_hotspots and len(path) < num_points:
         current = path[-1]
         
-        # Find closest remaining hotspot
-        distances = [np.sqrt((p[0]-current[0])**2 + (p[1]-current[1])**2) for p in remaining]
-        nearest_idx = np.argmin(distances)
-        path.append(remaining[nearest_idx])
-        remaining.pop(nearest_idx)
+        # Calculate scores that balance distance and importance
+        # People tend to look at important things even if they're further away
+        composite_scores = []
+        for i, (center, importance) in enumerate(top_hotspots):
+            # Calculate distance
+            distance = np.sqrt((center[0] - current[0])**2 + (center[1] - current[1])**2)
+            
+            # Normalize distance to 0-1 range (1 is closest)
+            max_distance = np.sqrt(w**2 + h**2)
+            normalized_distance = 1 - (distance / max_distance)
+            
+            # Weight importance more than distance (70% importance, 30% proximity)
+            composite_score = 0.7 * importance + 0.3 * normalized_distance
+            composite_scores.append((i, composite_score))
+        
+        # Choose the hotspot with highest composite score
+        best_index = max(composite_scores, key=lambda x: x[1])[0]
+        path.append(top_hotspots[best_index][0])
+        top_hotspots.pop(best_index)
     
-    return path
+    # Add realistic micro-saccades (small eye movements between fixations)
+    enhanced_path = []
+    for i in range(len(path)):
+        if i > 0:
+            # Add a micro-saccade midpoint with slight random deviation
+            # This simulates how eyes don't move in perfectly straight lines
+            start = path[i-1]
+            end = path[i]
+            
+            # Calculate midpoint with jitter
+            jitter_x = np.random.randint(-20, 20)
+            jitter_y = np.random.randint(-15, 15)
+            
+            # Add perpendicular deviation to create arc-like movement
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            dist = max(1, np.sqrt(dx**2 + dy**2))
+            
+            # Perpendicular vector with magnitude proportional to distance
+            perp_x, perp_y = -dy/dist * dist*0.1, dx/dist * dist*0.1
+            
+            mid_x = int((start[0] + end[0])/2 + perp_x + jitter_x)
+            mid_y = int((start[1] + end[1])/2 + perp_y + jitter_y)
+            
+            # Keep within image bounds
+            mid_x = max(0, min(mid_x, w-1))
+            mid_y = max(0, min(mid_y, h-1))
+            
+            enhanced_path.append(start)
+            enhanced_path.append([mid_x, mid_y])
+        
+        # Add the actual fixation point
+        enhanced_path.append(path[i])
+    
+    # Add a final point that simulates return to the main content
+    # People often return to the main content area after exploring
+    if enhanced_path and enhanced_path[-1][1] > h/2:  # If we ended in the bottom half
+        # Add a final point heading back toward the top
+        final_x = enhanced_path[-1][0]
+        final_y = max(h//4, enhanced_path[-1][1] - h//3)
+        enhanced_path.append([final_x, final_y])
+    
+    return enhanced_path
 
 def create_attention_heatmap(img: np.ndarray, hotspot_regions: List[List[int]], 
                            hotspot_scores: Dict, path: List[List[int]]) -> np.ndarray:
@@ -395,52 +452,150 @@ def create_attention_heatmap(img: np.ndarray, hotspot_regions: List[List[int]],
     # Create empty heatmap
     heatmap = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
     
-    # Add hotspots to heatmap
+    # Calculate max score for normalization
+    max_score = max(hotspot_scores.values()) if hotspot_scores else 1.0
+    
+    # Add hotspots to heatmap with improved Gaussian distribution
     for region in hotspot_regions:
         x1, y1, x2, y2 = region
-        center_x = (x1 + x2) // 2
-        center_y = (y1 + y2) // 2
         
-        # Get score for this region
+        # Skip invalid regions
+        if x2 <= x1 or y2 <= y1:
+            continue
+            
+        # Calculate region dimensions
+        width = x2 - x1
+        height = y2 - y1
+        
+        # Find region center
+        center_x = int((x1 + x2) / 2)
+        center_y = int((y1 + y2) / 2)
+        
+        # Get score for this region, normalized between 0.2-1.0
         region_tuple = tuple(region)
-        intensity = hotspot_scores.get(region_tuple, 1.0)
+        score = hotspot_scores.get(region_tuple, 0.2)
+        normalized_score = 0.2 + 0.8 * (score / max_score)
         
-        # Calculate radius based on region size
-        radius = int(min(x2-x1, y2-y1) * 0.5)
-        radius = max(radius, 30)  # Ensure minimum radius
+        # Calculate adaptive radius based on region size and score
+        # Larger elements need larger radius, but radius should scale sublinearly
+        base_radius = min(width, height) * 0.4
+        # Higher scores get larger radius (more attention spread)
+        radius = max(30, base_radius * (0.8 + 0.4 * normalized_score))
         
-        # Apply Gaussian around center (weighted by intensity)
-        y, x = np.ogrid[:img.shape[0], :img.shape[1]]
-        dist_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
-        mask = np.exp(-(dist_from_center**2) / (2 * radius**2)) * intensity
-        heatmap = np.maximum(heatmap, mask)
+        # Create a 2D Gaussian kernel around the center point
+        y_grid, x_grid = np.ogrid[:img.shape[0], :img.shape[1]]
+        
+        # Adaptive sigma for Gaussian based on region shape - wider for wider regions
+        sigma_x = radius * (width / max(1, height)) * 0.8
+        sigma_y = radius * (height / max(1, width)) * 0.8
+        
+        # Ensure minimum sigma
+        sigma_x = max(20, sigma_x)
+        sigma_y = max(20, sigma_y)
+        
+        # Anisotropic Gaussian (different spread in x and y directions based on region shape)
+        gaussian = np.exp(-(
+            ((x_grid - center_x) ** 2) / (2 * sigma_x ** 2) + 
+            ((y_grid - center_y) ** 2) / (2 * sigma_y ** 2)
+        )) * normalized_score
+        
+        # Add to existing heatmap using maximum blend
+        heatmap = np.maximum(heatmap, gaussian)
     
-    # Add eye path to heatmap with stronger intensity
+    # Add eye path to heatmap with realistic scanpath modeling
     if path:
+        # Generate more natural eye movement pattern with fixations and saccades
         for i, point in enumerate(path):
-            x, y = point
-            # Make sure coordinates are within bounds
-            x = min(max(x, 0), img.shape[1]-1)
-            y = min(max(y, 0), img.shape[0]-1)
+            if i >= len(path) - 1:
+                break
+                
+            x1, y1 = point
+            x2, y2 = path[i + 1]
             
-            # Calculate intensity (decreasing along path)
-            path_intensity = 2.0 * (1.0 - i / len(path))
+            # Ensure coordinates are within bounds
+            x1 = min(max(x1, 0), img.shape[1]-1)
+            y1 = min(max(y1, 0), img.shape[0]-1)
+            x2 = min(max(x2, 0), img.shape[1]-1)
+            y2 = min(max(y2, 0), img.shape[0]-1)
             
-            # Apply smaller Gaussian at path point
+            # Fixation intensity - decreases along path (first points get more attention)
+            # We use a nonlinear decay function to model attention decay
+            fixation_intensity = 1.8 * np.exp(-i / max(1, len(path) * 0.33))
+            
+            # Create a more prominent fixation point at start of path segment
             y_grid, x_grid = np.ogrid[:img.shape[0], :img.shape[1]]
-            dist = np.sqrt((x_grid - x)**2 + (y_grid - y)**2)
-            mask = np.exp(-(dist**2) / (2 * 20**2)) * path_intensity  # Smaller radius
-            heatmap = np.maximum(heatmap, mask)
+            # Fixations are more concentrated (smaller sigma)
+            fixation_sigma = 15 + (5 * i / max(1, len(path)))  # Fixations get slightly wider later in path
+            dist_sqr = ((x_grid - x1)**2 + (y_grid - y1)**2)
+            fixation = np.exp(-dist_sqr / (2 * fixation_sigma**2)) * fixation_intensity
+            heatmap = np.maximum(heatmap, fixation)
+            
+            # Generate saccade (eye movement path) between fixation points with gradually decreasing intensity
+            # Only create saccade for significant movements
+            dist = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+            if dist > 10:  # Only draw saccade if points are far enough apart
+                num_steps = max(3, int(dist / 15))  # More steps for longer distances
+                for step in range(1, num_steps):
+                    # Interpolate position along saccade path
+                    alpha = step / num_steps
+                    # Add slight curve to saccade path (more realistic)
+                    mid_deviation = np.sin(alpha * np.pi) * 10
+                    dx = (x2 - x1) * alpha
+                    dy = (y2 - y1) * alpha
+                    # Perpendicular offset for curved path
+                    if abs(x2 - x1) > abs(y2 - y1):
+                        # More horizontal movement
+                        px, py = x1 + dx, y1 + dy + mid_deviation
+                    else:
+                        # More vertical movement
+                        px, py = x1 + dx + mid_deviation, y1 + dy
+                        
+                    # Constrain to image bounds
+                    px = min(max(int(px), 0), img.shape[1]-1)
+                    py = min(max(int(py), 0), img.shape[0]-1)
+                    
+                    # Saccades have lower intensity than fixations and fade along path
+                    saccade_intensity = fixation_intensity * 0.3 * (1 - alpha)
+                    saccade_sigma = 10  # Narrower spread for saccade path
+                    
+                    # Add saccade point to heatmap
+                    dist = ((x_grid - px)**2 + (y_grid - py)**2)
+                    saccade_point = np.exp(-dist / (2 * saccade_sigma**2)) * saccade_intensity
+                    heatmap = np.maximum(heatmap, saccade_point)
     
     # Normalize to 0-1
-    heatmap = heatmap / np.max(heatmap) if np.max(heatmap) > 0 else heatmap
+    heatmap_max = np.max(heatmap)
+    if heatmap_max > 0:
+        heatmap = heatmap / heatmap_max 
     
-    # Convert to colormap
-    heatmap_colored = cv2.applyColorMap((heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    # Apply subtle Gaussian blur to smooth the heatmap
+    heatmap = cv2.GaussianBlur(heatmap, (21, 21), 0)
+    
+    # Create customized colormap for better visualization
+    # Convert from grayscale (0-1) to colormap
+    heatmap_8bit = (heatmap * 255).astype(np.uint8)
+    
+    # Use a custom color mapping for more realistic attention heatmap
+    # Start with INFERNO colormap but modify alpha/opacity by value
+    colored_heatmap = cv2.applyColorMap(heatmap_8bit, cv2.COLORMAP_INFERNO)
+    
+    # Create alpha channel based on intensity - low values become transparent
+    alpha_channel = np.clip(heatmap * 2.5, 0, 1)  # Boost low values for visibility, but keep transparent
+    
+    # Convert to BGRA (BGR with alpha channel)
+    bgra = np.zeros((img.shape[0], img.shape[1], 4), dtype=np.uint8)
+    bgra[..., 0:3] = colored_heatmap
+    bgra[..., 3] = (alpha_channel * 255).astype(np.uint8)
     
     # Blend with original image
-    alpha = 0.6
-    blended = cv2.addWeighted(img, 1-alpha, heatmap_colored, alpha, 0)
+    # Using alpha compositing
+    alpha_fg = alpha_channel[..., np.newaxis]
+    alpha_bg = 1.0
+    
+    # Final blend
+    foreground = colored_heatmap * alpha_fg
+    background = img * alpha_bg * (1 - alpha_fg)
+    blended = (foreground + background).astype(np.uint8)
     
     return blended
 
@@ -464,7 +619,13 @@ def get_figma_element_importance(figma_element: FigmaElement) -> float:
         weight *= 1.4
     elif any(key in name_lower for key in ['input', 'form', 'field', 'search']):
         weight *= 1.3
-
+    # New: Detect common UI patterns
+    elif any(key in name_lower for key in ['card', 'panel', 'section']):
+        weight *= 1.2
+    elif any(key in name_lower for key in ['footer', 'copyright', 'terms']):
+        weight *= 0.7  # Less important
+    elif any(key in name_lower for key in ['divider', 'separator', 'spacer']):
+        weight *= 0.5  # Even less important
 
     # Boost for text layers with short, concise text (often labels or CTAs)
     if layer_type == 'text' and figma_element.text_content:
@@ -473,6 +634,10 @@ def get_figma_element_importance(figma_element: FigmaElement) -> float:
             # Further boost for all-caps short text
             if figma_element.textCase == 'UPPER' and len(figma_element.text_content) < 25:
                  weight *= 1.2
+            # New: Detect common call-to-action text
+            text_lower = figma_element.text_content.lower()
+            if any(cta in text_lower for cta in ['sign up', 'login', 'register', 'buy now', 'get started', 'try free', 'download', 'subscribe']):
+                weight *= 1.4
         elif len(figma_element.text_content) == 0: # Empty text layers are less important
              weight *= 0.7
         
@@ -523,11 +688,23 @@ def get_figma_element_importance(figma_element: FigmaElement) -> float:
         elif fill_opacity < 0.3: # Very transparent fill
              weight *= 0.9
 
+        # New: Boost for high contrast colors (very dark or saturated colors)
+        if luminance < 0.2 or (max(r, g, b) - min(r, g, b) > 0.5):  # Dark or highly saturated
+            weight *= 1.25
 
     # Consider auto-layout properties - e.g. if an element is a key part of a structured layout
     if figma_element.layoutMode and figma_element.layoutMode != 'NONE':
         weight *= 1.05 # Slight boost for being part of an auto-layout structure
-
+        # New: More boost for primary axis items in auto-layout
+        if figma_element.primaryAxisSizingMode == 'FIXED':
+            weight *= 1.1  # Fixed size items in auto-layout often more important
+    
+    # New: Evaluate item importance by position within parent frame
+    if any(pos in name_lower for pos in ['top', 'header']):
+        weight *= 1.15
+    elif any(pos in name_lower for pos in ['first', 'primary']):
+        weight *= 1.2
+    
     return max(0.01, weight) # Ensure a minimum small positive weight if not invisible
 
 # New: Calculate boost for Figma layers (positional, size)
@@ -551,43 +728,93 @@ def calculate_figma_layer_boost(figma_element: FigmaElement, img_shape: Tuple) -
     if element_area <= 0 or viewport_area <= 0: # Avoid division by zero
         return 1.0
 
-    if (element_area / viewport_area) < 0.001: # Adjusted threshold for Figma (0.1% of frame area)
-        return 0.8  # Reduced boost for very tiny elements, but not zero
+    # Calculate area ratio - use logarithmic scale to better handle wide range of element sizes
+    area_ratio = element_area / viewport_area
+    if area_ratio < 0.001: # Very tiny elements (0.1% of frame area or less)
+        return 0.7  # Reduced boost for very tiny elements, but not zero
+    elif area_ratio > 0.5:  # Very large elements (50% of frame or more)
+        return 1.1  # Large elements get slight boost but not excessive
 
-    # F-pattern: higher weight for elements in top third and left half
-    # Assumes img_shape is (height, width)
+    # Modified F-pattern: Western reading patterns use more sophisticated model
+    # - Top third horizontal band (high importance)
+    # - Left vertical band (high importance)
+    # - Middle third horizontal band (medium importance)
+    # - Z-pattern diagonal relationships
     frame_height, frame_width = img_shape[:2]
-    is_in_top_third = bbox[1] < frame_height / 3
-    is_in_left_half = bbox[0] < frame_width / 2
     
-    f_pattern_boost = 1.0
-    if is_in_top_third:
-        f_pattern_boost += 0.3
-    if is_in_left_half:
-        f_pattern_boost += 0.2
-    
-    # Center bias: elements closer to the center get higher boost
+    # Element center point
     center_x = bbox[0] + element_width / 2
     center_y = bbox[1] + element_height / 2
     
+    # Normalized coordinates (0-1 range)
+    norm_x = center_x / frame_width
+    norm_y = center_y / frame_height
+    
+    # Base reading pattern boost - Z-pattern with higher weights for top and left
+    reading_pattern_boost = 1.0
+    
+    # Top band boost (decreases as we move down)
+    top_boost = max(0.0, 1.0 - (norm_y * 2.0)) * 0.4  # Ranges from 0.4 to 0 top-to-bottom
+    
+    # Left side boost (decreases as we move right)
+    left_boost = max(0.0, 1.0 - (norm_x * 1.5)) * 0.3  # Ranges from 0.3 to 0 left-to-right
+    
+    # Golden ratio points boost (naturally attractive focal points)
+    golden_ratio = 0.618
+    gr_points = [
+        (golden_ratio, golden_ratio),  # Golden ratio point
+        (1-golden_ratio, golden_ratio),  # Second focal point
+        (golden_ratio, 1-golden_ratio),  # Third focal point
+        (1-golden_ratio, 1-golden_ratio)  # Fourth focal point
+    ]
+    
+    # Calculate distance to nearest golden ratio point
+    min_gr_dist = min(
+        ((norm_x - gr_x)**2 + (norm_y - gr_y)**2)**0.5
+        for gr_x, gr_y in gr_points
+    )
+    
+    # Boost for proximity to golden ratio points
+    golden_boost = max(0.0, 0.2 - min_gr_dist) * 1.0  # Up to 0.2 boost for exact match
+    
+    # Combined reading pattern boost
+    reading_pattern_boost += top_boost + left_boost + golden_boost
+    
+    # Center bias: elements closer to the center still get a boost
     frame_center_x = frame_width / 2
     frame_center_y = frame_height / 2
     
-    max_distance = np.sqrt(frame_center_x**2 + frame_center_y**2)
-    if max_distance == 0: max_distance = 1 # Avoid division by zero for tiny frames
+    max_distance = (frame_width**2 + frame_height**2)**0.5 / 2
+    if max_distance == 0: max_distance = 1  # Avoid division by zero
     
-    distance = np.sqrt((center_x - frame_center_x)**2 + (center_y - frame_center_y)**2)
+    distance = ((center_x - frame_center_x)**2 + (center_y - frame_center_y)**2)**0.5
     normalized_distance = distance / max_distance
     
-    center_boost = 1.0 + (1.0 - normalized_distance) * 0.5 # Boost ranges from 1.0 to 1.5
+    # Exponential falloff for center distance (gentler falloff than linear)
+    center_boost = 1.0 + (1.0 - min(1.0, normalized_distance**0.8)) * 0.4  # Ranges from 1.0 to 1.4
     
     # Get base importance from element type and properties
     element_importance = get_figma_element_importance(figma_element)
-    if element_importance == 0: return 0 # If invisible or deemed unimportant
-
-    final_boost = element_importance * center_boost * f_pattern_boost
+    if element_importance == 0: return 0  # If invisible or deemed unimportant
     
-    return max(0.1, final_boost) # Ensure a minimum boost if element is somewhat important
+    # Size weight - neither too small nor too large is optimal for attention
+    size_weight = 1.0
+    if area_ratio > 0.001 and area_ratio < 0.05:  # Between 0.1% and 5% of frame
+        size_weight = 1.2  # Boost for "just right" sized elements
+    
+    # Aspect ratio analysis - elements with unusual aspect ratios draw more attention
+    if element_width > 0 and element_height > 0:
+        aspect_ratio = element_width / element_height
+        aspect_normalcy = min(aspect_ratio, 1/aspect_ratio) if aspect_ratio != 0 else 0.1
+        
+        # Unusual aspect ratios get a slight boost (very wide or very tall)
+        if aspect_normalcy < 0.3:  # Aspect ratio more extreme than 1:3
+            size_weight *= 1.1
+    
+    # Final boost calculation
+    final_boost = element_importance * center_boost * reading_pattern_boost * size_weight
+    
+    return max(0.1, min(3.0, final_boost))  # Clamp between 0.1 and 3.0 to avoid extreme values
 
 @app.get("/health")
 def health_check():
@@ -826,17 +1053,63 @@ async def figma_detect_hotspots(request: FigmaHotspotRequest):
         # 1. INITIALIZE SPECTRAL RESIDUAL SALIENCY ALGORITHM
         saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
 
+        # Preprocess image for better saliency detection
+        # Convert to Lab color space for perceptual processing
+        img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+        
+        # Enhanced preprocessing for better visual saliency detection
+        # Perceptual sharpening to accentuate edges and features
+        img_l = img_lab[:,:,0]
+        sharpened_l = cv2.addWeighted(img_l, 1.5, cv2.GaussianBlur(img_l, (0, 0), 3), -0.5, 0)
+        img_lab[:,:,0] = np.clip(sharpened_l, 0, 255).astype(np.uint8)
+        
+        # Convert back to BGR for saliency detection
+        img_enhanced = cv2.cvtColor(img_lab, cv2.COLOR_Lab2BGR)
+
         # 2. COMPUTE SALIENCY MAP
-        (success, saliency_map_cv) = saliency.computeSaliency(img)
+        (success, saliency_map_cv) = saliency.computeSaliency(img_enhanced)
         if not success or saliency_map_cv is None:
             raise HTTPException(status_code=500, detail="Saliency computation failed")
         
         # Ensure saliency map is float
         saliency_map_cv = saliency_map_cv.astype(np.float32)
-
+        
+        # 2.5 APPLY ADDITIONAL PERCEPTUAL FACTORS TO SALIENCY MAP
+        
+        # Color psychology factors - highlight red and yellow (action/attention colors)
+        # Convert to HSV for easier color detection
+        img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        
+        # Create color prominence maps
+        # Red detection (wraps around hue space)
+        red_mask1 = cv2.inRange(img_hsv, np.array([0, 100, 100]), np.array([10, 255, 255]))
+        red_mask2 = cv2.inRange(img_hsv, np.array([160, 100, 100]), np.array([180, 255, 255]))
+        red_mask = cv2.add(red_mask1, red_mask2)
+        
+        # Yellow detection
+        yellow_mask = cv2.inRange(img_hsv, np.array([20, 100, 100]), np.array([40, 255, 255]))
+        
+        # Blue detection (trust/calm - slightly less attention-grabbing than red/yellow)
+        blue_mask = cv2.inRange(img_hsv, np.array([100, 100, 100]), np.array([140, 255, 255]))
+        
+        # Normalize and weight color masks
+        red_influence = cv2.GaussianBlur(red_mask.astype(np.float32) / 255.0, (21, 21), 0) * 0.3
+        yellow_influence = cv2.GaussianBlur(yellow_mask.astype(np.float32) / 255.0, (21, 21), 0) * 0.25
+        blue_influence = cv2.GaussianBlur(blue_mask.astype(np.float32) / 255.0, (21, 21), 0) * 0.1
+        
+        # Edge detection for contrast (high contrast areas attract attention)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 100, 200)
+        edge_influence = cv2.GaussianBlur(edges.astype(np.float32) / 255.0, (21, 21), 0) * 0.2
+        
+        # Combine color psychology and edge detection with original saliency
+        saliency_map_perceptual = np.clip(
+            saliency_map_cv + red_influence + yellow_influence + blue_influence + edge_influence, 
+            0, 1
+        )
 
         # 3. APPLY CENTER BIAS TO SALIENCY MAP
-        saliency_map_biased = apply_center_bias(saliency_map_cv, img.shape)
+        saliency_map_biased = apply_center_bias(saliency_map_perceptual, img.shape)
 
         # 4. APPLY ADAPTIVE THRESHOLDING
         # Ensure saliency_map_biased is not empty and has finite values
@@ -855,7 +1128,6 @@ async def figma_detect_hotspots(request: FigmaHotspotRequest):
 
         _, thresh_map = cv2.threshold(saliency_map_biased, thresh_value, 1.0, cv2.THRESH_BINARY) # Output as float 0.0-1.0
         thresh_map_uint8 = (thresh_map * 255).astype(np.uint8)
-
 
         # 5. FIND AND FILTER CONTOURS
         contours, _ = cv2.findContours(thresh_map_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -892,11 +1164,33 @@ async def figma_detect_hotspots(request: FigmaHotspotRequest):
             dist_to_center = np.sqrt((center_x_pos - img_center_x)**2 + (center_y_pos - img_center_y)**2)
             position_score = 1.0 - (dist_to_center / max_dist) * 0.5 if max_dist > 0 else 0.75
             
-            initial_score = (0.6 * mean_saliency + 0.2 * size_score + 0.2 * position_score)
+            # New: Calculate visual contrast score within region
+            if region_area > 0:
+                region_roi = img[y:y+h, x:x+w]
+                if region_roi.size > 0:
+                    region_gray = cv2.cvtColor(region_roi, cv2.COLOR_BGR2GRAY)
+                    if region_gray.size > 0:
+                        region_std = np.std(region_gray)
+                        contrast_score = min(1.0, region_std / 50.0)  # Normalize, cap at 1.0
+                    else:
+                        contrast_score = 0.5  # Default if region is empty
+                else:
+                    contrast_score = 0.5  # Default if region is empty
+            else:
+                contrast_score = 0.5  # Default for zero area
+            
+            # Weighted factors for combined score
+            initial_score = (
+                0.45 * mean_saliency +   # Saliency is most important
+                0.20 * size_score +      # Size is relevant but not dominant
+                0.15 * position_score +  # Position has moderate influence
+                0.20 * contrast_score    # Contrast is important for visual pop
+            )
+            
             hotspot_regions_bbox.append(bbox)
             hotspot_scores[tuple(bbox)] = max(0.01, initial_score) # Ensure positive score
 
-
+        # Continue with the rest of the function unchanged...
         # 7. FACE DETECTION USING MEDIAPIPE
         face_detection_result = face_detection_model.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         detected_faces_bbox = []
@@ -1026,8 +1320,8 @@ async def figma_detect_hotspots(request: FigmaHotspotRequest):
         )
 
         # 12. PREPARE VISUALIZATION OUTPUTS (Saliency & Heatmap)
-        # Saliency map for visualization (using the biased one)
-        saliency_map_display = (saliency_map_biased / np.max(saliency_map_biased) * 255).astype(np.uint8) if np.max(saliency_map_biased) > 0 else np.zeros_like(saliency_map_biased, dtype=np.uint8)
+        # Saliency map for visualization (using the perceptual enhanced one)
+        saliency_map_display = (saliency_map_perceptual / np.max(saliency_map_perceptual) * 255).astype(np.uint8) if np.max(saliency_map_perceptual) > 0 else np.zeros_like(saliency_map_perceptual, dtype=np.uint8)
         saliency_map_colormap = cv2.applyColorMap(saliency_map_display, cv2.COLORMAP_JET)
         is_success, saliency_buf = cv2.imencode(".png", saliency_map_colormap)
         saliency_base64_str = base64.b64encode(saliency_buf.tobytes()).decode('utf-8') if is_success else ""

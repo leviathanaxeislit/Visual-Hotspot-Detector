@@ -2,12 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Visual Attention Analyzer</title>
+  <title>Clarity Advanced Algorithm POC</title>
   <style>
     body {
       font-family: sans-serif;
       margin: 0;
-      padding: 10px;
+      padding: 15px;
       background-color: #f0f0f0;
       color: #333;
       display: flex;
@@ -17,36 +17,39 @@
     }
     h2 {
       margin-top: 0;
+      font-size: 20px;
     }
     button {
       background-color: #007bff;
       color: white;
-      padding: 10px 15px;
+      padding: 12px 20px;
       border: none;
       border-radius: 4px;
       cursor: pointer;
-      font-size: 14px;
-      width: calc(100% - 20px); /* Account for body padding */
+      font-size: 16px;
+      width: 300px; /* Fixed width instead of 100% */
       box-sizing: border-box;
-      margin-bottom: 10px;
+      margin-bottom: 15px;
     }
     button:hover {
       background-color: #0056b3;
     }
     #statusMessage {
-      font-size: 12px;
+      font-size: 14px;
       color: #555;
-      min-height: 1.2em; /* Reserve space for messages */
+      min-height: 1.5em; /* Reserve space for messages */
       text-align: center;
       width: 100%;
+      margin-bottom: 15px;
     }
     #visualizationArea {
-      margin-top: 15px;
+      margin-top: 20px;
       position: relative; /* For positioning canvas on top of image */
       width: 100%; /* Container takes full width */
-      max-width: 500px; /* Max width for the image/canvas container */
+      max-width: 750px; /* Increased from 500px for larger window */
       display: flex; /* Use flex to center image if it's smaller than max-width */
       justify-content: center;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1); /* Add subtle shadow for better visibility */
     }
     #frameImage, #overlayCanvas {
       display: block;
@@ -166,37 +169,80 @@
         // 4. Draw Eye Movement Path
         if (results.eye_movement_path && Array.isArray(results.eye_movement_path)) {
             const pathPoints = results.eye_movement_path;
-            ctx.strokeStyle = 'rgba(0, 128, 255, 0.8)'; // Blue
-            ctx.fillStyle = 'rgba(0, 128, 255, 0.8)';
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = 2;
             
+            // Draw path lines first (behind the circles)
+            for (let i = 1; i < pathPoints.length; i++) {
+                const [prevX, prevY] = pathPoints[i-1];
+                const [x, y] = pathPoints[i];
+                const canvasX = x * scaleX;
+                const canvasY = y * scaleY;
+                const prevCanvasX = prevX * scaleX;
+                const prevCanvasY = prevY * scaleY;
+                
+                // Calculate color along gradient (green to yellow to red)
+                const progress = i / (pathPoints.length - 1);
+                let r, g, b;
+                if (progress < 0.5) {
+                    // Green to yellow transition for first half
+                    r = Math.round(255 * (progress * 2));
+                    g = 255;
+                    b = 0;
+                } else {
+                    // Yellow to red transition for second half
+                    r = 255;
+                    g = Math.round(255 * (1 - (progress - 0.5) * 2));
+                    b = 0;
+                }
+                
+                ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.8)`;
+                ctx.beginPath();
+                ctx.moveTo(prevCanvasX, prevCanvasY);
+                ctx.lineTo(canvasX, canvasY);
+                ctx.stroke();
+            }
+            
+            // Draw circles with numbers on top
             for (let i = 0; i < pathPoints.length; i++) {
                 const [x, y] = pathPoints[i];
                 const canvasX = x * scaleX;
                 const canvasY = y * scaleY;
-
-                // Draw circle
+                
+                // Calculate color (green start, red end)
+                const progress = i / (pathPoints.length - 1) || 0;
+                let r, g, b;
+                if (progress < 0.5) {
+                    // Green to yellow transition for first half
+                    r = Math.round(255 * (progress * 2));
+                    g = 255;
+                    b = 0;
+                } else {
+                    // Yellow to red transition for second half
+                    r = 255;
+                    g = Math.round(255 * (1 - (progress - 0.5) * 2));
+                    b = 0;
+                }
+                
+                // Draw circle with gradient color
+                ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.9)`;
                 ctx.beginPath();
-                ctx.arc(canvasX, canvasY, 5, 0, 2 * Math.PI);
+                
+                // Larger circle for first and last points
+                const radius = (i === 0 || i === pathPoints.length - 1) ? 8 : 6;
+                ctx.arc(canvasX, canvasY, radius, 0, 2 * Math.PI);
                 ctx.fill();
+                
+                // Stroke around circle for better visibility
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 1;
+                ctx.stroke();
 
-                // Draw number in circle
+                // Draw number in circle (larger font)
                 ctx.fillStyle = 'white';
-                ctx.font = 'bold 8px sans-serif';
+                ctx.font = 'bold 12px sans-serif';  // Increased from 8px to 12px
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillText((i + 1).toString(), canvasX, canvasY);
-                
-                ctx.fillStyle = 'rgba(0, 128, 255, 0.8)'; // Reset fillStyle for next circle if any
-
-                // Draw line to previous point
-                if (i > 0) {
-                    const [prevX, prevY] = pathPoints[i-1];
-                    ctx.beginPath();
-                    ctx.moveTo(prevX * scaleX, prevY * scaleY);
-                    ctx.lineTo(canvasX, canvasY);
-                    ctx.stroke();
-                }
             }
         }
         statusMessage.textContent = 'Analysis displayed.';
